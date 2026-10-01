@@ -5,6 +5,17 @@ All notable changes to Open Agent Connect should be documented in this file.
 This project follows the spirit of Keep a Changelog and uses semantic version
 tags for releases.
 
+## Unreleased
+
+### Changed
+
+- dsh-plugin: support the DSH 0.2.0 kernel line — widened every `@deepseek-ai`
+  peer range with `^0.2.0-rc.1` (typechecked and built against 0.2.0-rc.2),
+  devDependencies bumped to the 0.2.0-rc.2 line, and the optional
+  `@deepseek-ai/dsh-agent-presets` peer dropped (the package no longer exists
+  on 0.2.0; both registry backends resolve the service structurally, and the
+  0.1.5/0.1.6 directory backends never imported it).
+
 ## 0.9.0 - 2026-09-25
 
 ### Added
