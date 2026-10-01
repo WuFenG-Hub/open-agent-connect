@@ -9,17 +9,42 @@ dsh plugin --profile web add open-agent-connect-dsh
 End-user install, Node `>=20 <25`, first Bot, and first chat: `docs/hosts/dsh.md`.
 
 Host kernel requirement: this plugin is built and verified against the DSH
-**0.1.7-rc.2** client surface (npm `next` dist-tag) and runs on the
-**0.1.5**, **0.1.6**, and **0.1.7** kernel lines — most peer ranges are
-`^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1`, with the wider
-`^0.1.2-alpha.2 || ^0.1.3-alpha.1` spans kept on the packages the
+**0.2.0-rc.2** client surface (npm) and runs on the **0.1.5**, **0.1.6**,
+**0.1.7**, and **0.2.0** kernel lines — most peer ranges are
+`^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`, with the
+wider `^0.1.2-alpha.2 || ^0.1.3-alpha.1` spans kept on the packages the
 preset/persona surface still shares. The same build serves the DSH **desktop
-app** (Electron, 0.1.7-rc.2+): it runs profile `desktop`
+app** (Electron, 0.2.0-rc.2+): it runs profile `desktop`
 (`~/.dsh/profiles/desktop`) composed from the same web-app bundle, so
 `webServer`/`webRuntime` are present, the `platform: "web"` client bundle
 loads, and every slot injection behaves as in the browser. Install it from the
 app's plugin manager, or from a shell with `dsh plugin --profile desktop add
-open-agent-connect-dsh`. The 0.1.7 adaptations worth knowing about:
+open-agent-connect-dsh`. The 0.2.0 adaptations worth knowing about:
+
+- No code changes were required: the 0.1.7 declarative registry backend is the
+  backend on 0.2.0 too. `agentPresets.register(definition)` keeps the same
+  definition shape (`id`/`name`/`description`/`order`/`plugins`), the same
+  disposer return, and the same `Duplicate agent preset:` error text; the
+  shipped `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` anchor keeps
+  its `preset-standard` row with the persona `prefix`/`suffix` split;
+  `profileContext`, the `dsh.client` `inject`/`external`/`platform` manifest,
+  the `window.__ModuleLoader__` client closure contract, and every slot key
+  the client registers (`settings.section`, `sidebar.right.pane.tab`,
+  `shell.overlay`, `sidebar.panellist`, …) are unchanged.
+- `@deepseek-ai/dsh-agent-presets` (the 0.1.5/0.1.6 directory-preset package)
+  no longer exists on 0.2.0, so its optional peer was dropped. Nothing
+  imported it: both registry backends resolve the service structurally through
+  `ctx.agentPresets`, and the legacy directory backend only ever runs on
+  ≤0.1.6 kernels where the package is present.
+- The settings surface was split into per-section packages
+  (`dsh-client-ui-settings-general`, `-models`, `-plugins`, …) but the base
+  `dsh-client-ui-settings` and its `settings.section` slot registration
+  contract that OAC sections mount through are unchanged.
+- The compatibility gate described below applies unchanged on 0.2.0: keep
+  every range anchored on a prerelease lower bound (`^0.2.0-rc.1`, never a
+  bare `^0.2.0`, which excludes rc builds).
+
+The 0.1.7 adaptations worth knowing about:
 
 - Directory presets (`~/.dsh/.agent-presets`, `agentPresets.copy/read/remove`)
   are gone: presets are declarative in-memory `PresetDefinition`s registered

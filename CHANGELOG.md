@@ -15,6 +15,11 @@ tags for releases.
   `@deepseek-ai/dsh-agent-presets` peer dropped (the package no longer exists
   on 0.2.0; both registry backends resolve the service structurally, and the
   0.1.5/0.1.6 directory backends never imported it).
+- CI: new `dsh-plugin` job running the plugin's typecheck and test suite
+  against a `0.1.7-rc.2` / `0.2.0-rc.2` kernel matrix — the plugin tree was
+  previously uncovered by CI, which is how the 0.2.0 peer drift went unnoticed.
+- Docs: `dsh-plugin/README.md` gains a 0.2.0 kernel section; the desktop-app
+  version notes in `docs/hosts/dsh.md` now lead with the 0.2.0 line.
 
 ## 0.9.0 - 2026-09-25
 
