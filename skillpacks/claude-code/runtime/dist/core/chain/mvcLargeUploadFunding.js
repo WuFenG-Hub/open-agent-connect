@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildMvcLargeUploadPreTx = buildMvcLargeUploadPreTx;
 exports.buildMvcLargeUploadFunding = buildMvcLargeUploadFunding;
 const meta_contract_1 = require("meta-contract");
 const mvcPendingUtxos_1 = require("./mvcPendingUtxos");
@@ -76,7 +77,7 @@ function selectFundingUtxos(input) {
     }
     throw new Error('Insufficient MVC balance for large upload funding.');
 }
-function buildPreTx(input) {
+function buildMvcLargeUploadPreTx(input) {
     const txComposer = new meta_contract_1.TxComposer();
     txComposer.appendP2PKHInput({
         address: new meta_contract_1.mvc.Address(input.address, NET),
@@ -155,14 +156,14 @@ async function buildMvcLargeUploadFunding(input) {
     return {
         mergeTxHex,
         mergeTxId,
-        chunkPreTxHex: buildPreTx({
+        chunkPreTxHex: buildMvcLargeUploadPreTx({
             mergeTxId,
             outputIndex: 0,
             satoshis: Number(mergeTx.outputs[0].satoshis),
             address,
             privateKey,
         }),
-        indexPreTxHex: buildPreTx({
+        indexPreTxHex: buildMvcLargeUploadPreTx({
             mergeTxId,
             outputIndex: 1,
             satoshis: Number(mergeTx.outputs[1].satoshis),

@@ -491,6 +491,59 @@ test('uploadLargeFileToChain keeps chunked uploads on largeUploader when sponsor
   assert.equal('feeAssist' in result, false);
 });
 
+test('uploadLargeFileToChain passes the sponsor client to the large uploader and surfaces chunked feeAssist', async () => {
+  const { filePath } = await tempFile('sponsored-chunked.mp4', DIRECT_UPLOAD_MAX_BYTES + 1);
+  const sponsorCalls = [];
+  const sponsorClient = createSponsorClient(sponsorCalls);
+  const largeCalls = [];
+
+  const result = await uploadLargeFileToChain({
+    filePath,
+    network: 'mvc',
+    signer: fakeSponsorSigner(),
+    mvcSponsorClient: sponsorClient,
+    largeUploader: {
+      upload: async (input) => {
+        largeCalls.push(input);
+        return {
+          pinId: 'large-sponsored-pin',
+          txids: ['large-sponsored-tx'],
+          totalCost: 456,
+          network: input.network,
+          fileName: input.fileName,
+          contentType: input.contentType,
+          bytes: input.bytes,
+          extension: input.extension,
+          metafileUri: 'metafile://large-sponsored-pin.mp4',
+          previewUrl: '',
+          downloadUrl: '',
+          globalMetaId: 'gm-large-sponsored',
+          uploadMode: 'chunked',
+          feeAssist: {
+            attempted: true,
+            used: true,
+            mode: 'mvc_sponsor_v2',
+            sponsor: 'mvc_sponsor_v2',
+            stage: 'done',
+            orderId: 'order-chunked',
+            billedBy: 'traffic',
+          },
+        };
+      },
+    },
+  });
+
+  // The orchestrator delegates sponsor billing to the large uploader instead
+  // of running its own direct-upload sponsor flow for chunked files.
+  assert.equal(sponsorCalls.length, 0);
+  assert.equal(largeCalls.length, 1);
+  assert.equal(largeCalls[0].mvcSponsorClient, sponsorClient);
+  assert.equal(result.uploadMode, 'chunked');
+  assert.equal(result.feeAssist.used, true);
+  assert.equal(result.feeAssist.mode, 'mvc_sponsor_v2');
+  assert.equal(result.feeAssist.billedBy, 'traffic');
+});
+
 test('uploadLargeFileToChain uses orchestrator-owned metadata in large upload results', async () => {
   const { filePath } = await tempFile('source.md', 16);
 

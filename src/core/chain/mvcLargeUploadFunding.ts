@@ -104,7 +104,7 @@ function selectFundingUtxos(input: {
   throw new Error('Insufficient MVC balance for large upload funding.');
 }
 
-function buildPreTx(input: {
+export function buildMvcLargeUploadPreTx(input: {
   mergeTxId: string;
   outputIndex: number;
   satoshis: number;
@@ -203,14 +203,14 @@ export async function buildMvcLargeUploadFunding(input: {
   return {
     mergeTxHex,
     mergeTxId,
-    chunkPreTxHex: buildPreTx({
+    chunkPreTxHex: buildMvcLargeUploadPreTx({
       mergeTxId,
       outputIndex: 0,
       satoshis: Number(mergeTx.outputs[0].satoshis),
       address,
       privateKey,
     }),
-    indexPreTxHex: buildPreTx({
+    indexPreTxHex: buildMvcLargeUploadPreTx({
       mergeTxId,
       outputIndex: 1,
       satoshis: Number(mergeTx.outputs[1].satoshis),

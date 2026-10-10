@@ -39,6 +39,8 @@ export interface ProductionLargeFileUploader {
         extension: string;
         network: string;
         signer: Signer;
+        /** Sponsor (traffic/quota) client for fee-assisted chunked uploads; absent keeps the wallet-funded path. */
+        mvcSponsorClient?: MvcSponsorV2DirectUploadClient;
     }): Promise<Omit<UploadLargeFileResult, 'metawebUrl' | 'verification'>>;
 }
 export declare function uploadLargeFileToChain(input: {

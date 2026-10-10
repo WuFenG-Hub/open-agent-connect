@@ -60,6 +60,8 @@ export interface ProductionLargeFileUploader {
     extension: string;
     network: string;
     signer: Signer;
+    /** Sponsor (traffic/quota) client for fee-assisted chunked uploads; absent keeps the wallet-funded path. */
+    mvcSponsorClient?: MvcSponsorV2DirectUploadClient;
   }): Promise<Omit<UploadLargeFileResult, 'metawebUrl' | 'verification'>>;
 }
 
@@ -236,6 +238,7 @@ export async function uploadLargeFileToChain(input: {
     extension,
     network,
     signer: input.signer,
+    ...(input.mvcSponsorClient ? { mvcSponsorClient: input.mvcSponsorClient } : {}),
   });
   const result = withCanonicalUrls({
     pinId: requireProviderString(largeResult.pinId, 'pinId'),
@@ -249,6 +252,7 @@ export async function uploadLargeFileToChain(input: {
     metafileUri: requireProviderString(largeResult.metafileUri, 'metafileUri'),
     globalMetaId: requireProviderString(largeResult.globalMetaId, 'globalMetaId'),
     uploadMode: 'chunked' as const,
+    ...(largeResult.feeAssist ? { feeAssist: largeResult.feeAssist } : {}),
   });
   const verification = await maybeVerify({
     pinId: result.pinId,
