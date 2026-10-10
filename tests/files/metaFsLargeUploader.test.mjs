@@ -547,3 +547,352 @@ test('createMetaFsLargeUploader rejects unsupported chains before network calls'
   );
   assert.equal(calls.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Sponsored (traffic/quota) chunked-upload funding
+// ---------------------------------------------------------------------------
+
+const { mvc } = require('meta-contract');
+const SPONSOR_ADDRESS = '15Lofqw6Kpa6P8WnTYXKvmPyw3UZvvQWrB';
+const SPONSOR_COMMIT_TXID = 'd'.repeat(64);
+const SPONSOR_IDENTITY = {
+  ...DEFAULT_IDENTITY,
+  addresses: { mvc: SPONSOR_ADDRESS },
+  mvcAddress: SPONSOR_ADDRESS,
+};
+// Raw Metalet UTXO shape (txid/outIndex/value); fetchMvcFundingUtxos
+// normalizes it before it reaches the sponsor funding helper.
+const SPONSOR_ANCHOR_UTXO = {
+  txid: FIRST_TXID,
+  outIndex: 0,
+  value: 100_000,
+  height: 8,
+};
+const SPONSOR_ANCHOR_CHAIN_UTXO = {
+  txId: FIRST_TXID,
+  outputIndex: 0,
+  satoshis: 100_000,
+  address: SPONSOR_ADDRESS,
+  height: 8,
+};
+// estimate gives chunkPreTxFee 1000 / indexPreTxFee 2000; the harness config
+// feeRate 2.9 floors to 2, so outputs are fee + ceil(350 * 2) = +700 each.
+const SPONSOR_CHUNK_OUTPUT = 1700;
+const SPONSOR_INDEX_OUTPUT = 2700;
+
+function sponsorError(message, { code, stage, reason }) {
+  return Object.assign(new Error(message), { code, stage, reason });
+}
+
+function createSponsorFundingClient(overrides = {}) {
+  const calls = [];
+  const spends = [];
+  const client = {
+    calls,
+    spends,
+    traffic: {
+      resolveTrafficAccount: overrides.resolveTrafficAccount ?? (async () => ({
+        accountId: 'traffic-account-1',
+        authSignature: 'traffic-auth-sig',
+        timestamp: 1,
+      })),
+      recordSpend: async (entry) => {
+        spends.push(entry);
+      },
+    },
+    async getAddressInfo(payload) {
+      calls.push(['getAddressInfo', payload]);
+      return overrides.addressInfo ?? {
+        exists: true,
+        balance: 0,
+        grantedAmount: 5_000_000,
+        reservedAmount: 0,
+        spentAmount: 0,
+        availableAmount: 5_000_000,
+        status: 'active',
+        raw: {},
+      };
+    },
+    async getChallenge() {
+      calls.push(['getChallenge']);
+      return { challengeId: 'challenge-1', message: 'sponsor challenge', raw: {} };
+    },
+    async preSponsor(payload) {
+      calls.push(['preSponsor', payload]);
+      if (overrides.preSponsor) {
+        return overrides.preSponsor(payload);
+      }
+      return {
+        preparedTxHex: payload.txHex,
+        orderId: 'order-1',
+        minerFee: 900,
+        userInputIndexes: [0],
+        raw: {},
+      };
+    },
+    async commitSponsor(payload) {
+      calls.push(['commitSponsor', payload]);
+      return overrides.commitResult ?? {
+        txId: SPONSOR_COMMIT_TXID,
+        minerFee: 750,
+        raw: {},
+      };
+    },
+    ...(overrides.methods ?? {}),
+  };
+  return client;
+}
+
+function outputAddress(output) {
+  try {
+    const resolved = output.script?.toAddress?.('livenet');
+    return resolved == null ? '' : String(resolved);
+  } catch {
+    return '';
+  }
+}
+
+test('createMetaFsLargeUploader funds the chunked merge transaction through the sponsor first', async () => {
+  __clearPendingMvcUtxosForTests();
+  const { filePath, buffer } = await tempFile('sponsored-large.mp4', 'sponsored chunked data');
+  const { calls, fetchFn } = createFetchHarness({
+    utxoPages: [[SPONSOR_ANCHOR_UTXO]],
+  });
+  const { buildFunding, calls: fundingCalls } = createFundingHarness();
+  const sponsorClient = createSponsorFundingClient();
+  const uploader = createMetaFsLargeUploader({
+    fetchFn,
+    buildFunding,
+    sleep: async () => {},
+  });
+
+  const result = await uploader.upload({
+    filePath,
+    fileName: 'sponsored-large.mp4',
+    contentType: 'video/mp4',
+    bytes: buffer.length,
+    extension: '.mp4',
+    network: 'mvc',
+    signer: fakeSigner(SPONSOR_IDENTITY),
+    mvcSponsorClient: sponsorClient,
+  });
+
+  // Sponsor ran before any wallet funding; the wallet path never executed.
+  assert.deepEqual(sponsorClient.calls.map(([name]) => name), [
+    'getAddressInfo',
+    'getChallenge',
+    'preSponsor',
+    'commitSponsor',
+    'getAddressInfo',
+  ]);
+  assert.equal(fundingCalls.length, 0);
+
+  // The merge draft anchors one wallet UTXO, returns it fully as change, and
+  // asks the sponsor to fund both pre-funding outputs.
+  const prePayload = sponsorClient.calls.find(([name]) => name === 'preSponsor')[1];
+  const draftTx = new mvc.Transaction(prePayload.txHex);
+  assert.equal(draftTx.inputs.length, 1);
+  assert.deepEqual(
+    draftTx.outputs.map((output) => Number(output.satoshis)),
+    [SPONSOR_CHUNK_OUTPUT, SPONSOR_INDEX_OUTPUT, SPONSOR_ANCHOR_CHAIN_UTXO.satoshis],
+  );
+  assert.ok(draftTx.outputs.every((output) => outputAddress(output) === SPONSOR_ADDRESS));
+
+  // The submitted merge transaction is the sponsor-committed one, and the
+  // pre-transactions spend its located funding outputs.
+  const chunkedUpload = calls.find((call) => call.path === '/api/v1/files/chunked-upload');
+  const mergeTx = new mvc.Transaction(chunkedUpload.body.mergeTxHex);
+  assert.deepEqual(
+    mergeTx.outputs.map((output) => Number(output.satoshis)),
+    [SPONSOR_CHUNK_OUTPUT, SPONSOR_INDEX_OUTPUT, SPONSOR_ANCHOR_CHAIN_UTXO.satoshis],
+  );
+  const chunkPreTx = new mvc.Transaction(chunkedUpload.body.chunkPreTxHex);
+  const indexPreTx = new mvc.Transaction(chunkedUpload.body.indexPreTxHex);
+  assert.equal(chunkPreTx.toObject().inputs[0].prevTxId, SPONSOR_COMMIT_TXID);
+  assert.equal(chunkPreTx.toObject().inputs[0].outputIndex, 0);
+  assert.equal(indexPreTx.toObject().inputs[0].prevTxId, SPONSOR_COMMIT_TXID);
+  assert.equal(indexPreTx.toObject().inputs[0].outputIndex, 1);
+
+  assert.equal(result.pinId, 'index-tx-1i0');
+  assert.equal(result.uploadMode, 'chunked');
+  assert.equal(result.totalCost, 1000 + 2000 + 750);
+  assert.equal(result.feeAssist.attempted, true);
+  assert.equal(result.feeAssist.used, true);
+  assert.equal(result.feeAssist.mode, 'mvc_sponsor_v2');
+  assert.equal(result.feeAssist.stage, 'done');
+  assert.equal(result.feeAssist.orderId, 'order-1');
+  assert.equal(result.feeAssist.billedBy, 'traffic');
+  assert.equal(result.feeAssist.quotaBefore.availableAmount, 5_000_000);
+
+  // Traffic journal recorded the sponsored merge spend.
+  assert.equal(sponsorClient.spends.length, 1);
+  assert.equal(sponsorClient.spends[0].kind, '/file');
+  assert.equal(sponsorClient.spends[0].billedBy, 'traffic');
+  assert.equal(sponsorClient.spends[0].txId, SPONSOR_COMMIT_TXID);
+
+  // Anchor UTXO is tracked as spent and the merge outputs as created.
+  const spendable = resolveSpendableMvcUtxos({
+    address: SPONSOR_ADDRESS,
+    utxos: [SPONSOR_ANCHOR_CHAIN_UTXO],
+  });
+  assert.equal(spendable.some((utxo) => utxo.txId === SPONSOR_ANCHOR_CHAIN_UTXO.txId), false);
+  assert.equal(
+    spendable.some((utxo) => utxo.txId === SPONSOR_COMMIT_TXID && utxo.outputIndex === 0 && utxo.satoshis === SPONSOR_CHUNK_OUTPUT),
+    true,
+  );
+  __clearPendingMvcUtxosForTests();
+});
+
+test('createMetaFsLargeUploader falls back to wallet funding when traffic is insufficient', async () => {
+  __clearPendingMvcUtxosForTests();
+  const { filePath, buffer } = await tempFile('traffic-short.mp4', 'traffic insufficient');
+  const { calls, fetchFn } = createFetchHarness({
+    utxoPages: [
+      [SPONSOR_ANCHOR_UTXO],
+      [{ txid: SECOND_TXID, outIndex: 0, value: 10000, height: 9 }],
+    ],
+  });
+  const { buildFunding, calls: fundingCalls } = createFundingHarness();
+  const sponsorClient = createSponsorFundingClient({
+    methods: {
+      async preSponsor(payload) {
+        sponsorClient.calls.push(['preSponsor', payload]);
+        throw sponsorError('traffic account balance insufficient', {
+          code: 'mvc_fee_assist_pre_failed',
+          stage: 'pre',
+          reason: 'insufficient_traffic',
+        });
+      },
+    },
+  });
+  const uploader = createMetaFsLargeUploader({
+    fetchFn,
+    buildFunding,
+    sleep: async () => {},
+  });
+
+  const result = await uploader.upload({
+    filePath,
+    fileName: 'traffic-short.mp4',
+    contentType: 'video/mp4',
+    bytes: buffer.length,
+    extension: '.mp4',
+    network: 'mvc',
+    signer: fakeSigner(SPONSOR_IDENTITY),
+    mvcSponsorClient: sponsorClient,
+  });
+
+  assert.deepEqual(sponsorClient.calls.map(([name]) => name), [
+    'getAddressInfo',
+    'getChallenge',
+    'preSponsor',
+  ]);
+  assert.equal(sponsorClient.spends.length, 0);
+
+  // The wallet-funded path produced the submitted transactions.
+  assert.equal(fundingCalls.length, 1);
+  const chunkedUpload = calls.find((call) => call.path === '/api/v1/files/chunked-upload');
+  assert.equal(chunkedUpload.body.mergeTxHex, 'merge-hex-1');
+  assert.equal(chunkedUpload.body.chunkPreTxHex, 'chunk-pre-hex-1');
+  assert.equal(chunkedUpload.body.indexPreTxHex, 'index-pre-hex-1');
+
+  assert.equal(result.pinId, 'index-tx-1i0');
+  assert.equal(result.uploadMode, 'chunked');
+  assert.equal(result.feeAssist.attempted, true);
+  assert.equal(result.feeAssist.used, false);
+  assert.equal(result.feeAssist.mode, 'self_paid');
+  assert.equal(result.feeAssist.reason, 'insufficient_traffic');
+  assert.equal(result.feeAssist.stage, 'pre');
+  __clearPendingMvcUtxosForTests();
+});
+
+test('createMetaFsLargeUploader falls back to wallet funding when sponsor quota cannot cover the outputs', async () => {
+  __clearPendingMvcUtxosForTests();
+  const { filePath, buffer } = await tempFile('quota-short.mp4', 'quota insufficient');
+  const { fetchFn } = createFetchHarness({
+    utxoPages: [
+      [SPONSOR_ANCHOR_UTXO],
+      [{ txid: SECOND_TXID, outIndex: 0, value: 10000, height: 9 }],
+    ],
+  });
+  const { buildFunding, calls: fundingCalls } = createFundingHarness();
+  const sponsorClient = createSponsorFundingClient({
+    addressInfo: {
+      exists: true,
+      balance: 0,
+      grantedAmount: 10,
+      reservedAmount: 0,
+      spentAmount: 0,
+      availableAmount: 10,
+      status: 'active',
+      raw: {},
+    },
+  });
+  const uploader = createMetaFsLargeUploader({
+    fetchFn,
+    buildFunding,
+    sleep: async () => {},
+  });
+
+  const result = await uploader.upload({
+    filePath,
+    fileName: 'quota-short.mp4',
+    contentType: 'video/mp4',
+    bytes: buffer.length,
+    extension: '.mp4',
+    network: 'mvc',
+    signer: fakeSigner(SPONSOR_IDENTITY),
+    mvcSponsorClient: sponsorClient,
+  });
+
+  // Advisory quota check stops the sponsor flow before the challenge.
+  assert.deepEqual(sponsorClient.calls.map(([name]) => name), ['getAddressInfo']);
+  assert.equal(fundingCalls.length, 1);
+  assert.equal(result.pinId, 'index-tx-1i0');
+  assert.equal(result.feeAssist.used, false);
+  assert.equal(result.feeAssist.mode, 'self_paid');
+  assert.equal(result.feeAssist.reason, 'insufficient_quota');
+  assert.equal(result.feeAssist.stage, 'address_info');
+  __clearPendingMvcUtxosForTests();
+});
+
+test('createMetaFsLargeUploader does not fall back to the wallet after the sponsor commits the merge transaction', async () => {
+  __clearPendingMvcUtxosForTests();
+  const { filePath, buffer } = await tempFile('post-commit.mp4', 'post commit failure');
+  const { fetchFn } = createFetchHarness({
+    utxoPages: [[SPONSOR_ANCHOR_UTXO]],
+    chunkedResponses: [{
+      code: 1,
+      message: 'chunked upload rejected after merge commit',
+    }],
+  });
+  const { buildFunding, calls: fundingCalls } = createFundingHarness();
+  const sponsorClient = createSponsorFundingClient();
+  const uploader = createMetaFsLargeUploader({
+    fetchFn,
+    buildFunding,
+    sleep: async () => {},
+  });
+
+  await assert.rejects(
+    () => uploader.upload({
+      filePath,
+      fileName: 'post-commit.mp4',
+      contentType: 'video/mp4',
+      bytes: buffer.length,
+      extension: '.mp4',
+      network: 'mvc',
+      signer: fakeSigner(SPONSOR_IDENTITY),
+      mvcSponsorClient: sponsorClient,
+    }),
+    (error) => {
+      assert.equal(error.code, 'large_file_upload_metafs_failed');
+      assert.match(error.message, /chunked upload rejected after merge commit/i);
+      return true;
+    },
+  );
+
+  // The merge transaction is already broadcast, so the wallet path must not run.
+  assert.equal(fundingCalls.length, 0);
+  __clearPendingMvcUtxosForTests();
+});

@@ -145,6 +145,7 @@ async function uploadLargeFileToChain(input) {
         extension,
         network,
         signer: input.signer,
+        ...(input.mvcSponsorClient ? { mvcSponsorClient: input.mvcSponsorClient } : {}),
     });
     const result = withCanonicalUrls({
         pinId: requireProviderString(largeResult.pinId, 'pinId'),
@@ -158,6 +159,7 @@ async function uploadLargeFileToChain(input) {
         metafileUri: requireProviderString(largeResult.metafileUri, 'metafileUri'),
         globalMetaId: requireProviderString(largeResult.globalMetaId, 'globalMetaId'),
         uploadMode: 'chunked',
+        ...(largeResult.feeAssist ? { feeAssist: largeResult.feeAssist } : {}),
     });
     const verification = await maybeVerify({
         pinId: result.pinId,

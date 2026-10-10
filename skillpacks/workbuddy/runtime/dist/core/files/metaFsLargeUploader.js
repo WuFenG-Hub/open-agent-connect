@@ -7,6 +7,7 @@ const mvcLargeUploadFunding_1 = require("../chain/mvcLargeUploadFunding");
 const mvcPendingUtxos_1 = require("../chain/mvcPendingUtxos");
 const utxoBroadcastErrors_1 = require("../chain/utxoBroadcastErrors");
 const spendQueue_1 = require("../wallet/spendQueue");
+const mvcSponsorLargeUploadFunding_1 = require("./mvcSponsorLargeUploadFunding");
 const metafileUrls_1 = require("./metafileUrls");
 const metafileUri_1 = require("./metafileUri");
 const uploadLargeFile_1 = require("./uploadLargeFile");
@@ -220,6 +221,64 @@ function calculateTotalCost(funding) {
     const change = funding.changeUtxo?.satoshis ?? 0;
     return Math.max(0, spent - change);
 }
+async function submitChunkedUpload(input) {
+    const uploadResult = await postMetaFsJson({
+        fetchFn: input.fetchFn,
+        baseUrl: input.baseUrl,
+        path: '/api/v1/files/chunked-upload',
+        body: {
+            metaId: input.metaId,
+            address: input.address,
+            fileName: input.fileName,
+            path: input.uploadPath,
+            operation: 'create',
+            contentType: input.contentType,
+            chunkPreTxHex: input.chunkPreTxHex,
+            indexPreTxHex: input.indexPreTxHex,
+            mergeTxHex: input.mergeTxHex,
+            feeRate: input.feeRate,
+            isBroadcast: true,
+            storageKey: input.storageKey,
+        },
+    });
+    if (uploadResult?.status && uploadResult.status !== 'success') {
+        throw codedError('large_file_upload_metafs_failed', normalizeText(uploadResult.message) || `MetaFS chunked upload returned status ${uploadResult.status}.`);
+    }
+    const indexTxId = normalizeText(uploadResult?.indexTxId) || normalizeText(uploadResult?.txId);
+    if (!indexTxId) {
+        throw codedError('large_file_upload_metafs_failed', 'MetaFS chunked upload did not return indexTxId/txId.');
+    }
+    return indexTxId;
+}
+function buildSponsorFallbackFeeAssist(fallback) {
+    return {
+        attempted: true,
+        used: false,
+        mode: 'self_paid',
+        sponsor: 'mvc_sponsor_v2',
+        reason: fallback.reason,
+        stage: fallback.stage,
+        quotaBefore: fallback.quotaBefore,
+        advisoryFeeEstimate: fallback.advisoryFeeEstimate,
+    };
+}
+async function submitChunkedUploadWithRetry(input) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= RETRYABLE_ATTEMPTS; attempt += 1) {
+        try {
+            return await submitChunkedUpload(input.context);
+        }
+        catch (error) {
+            lastError = error;
+            if (attempt < RETRYABLE_ATTEMPTS && isRetryableLargeUploadError(error)) {
+                await input.sleep(RETRYABLE_DELAY_MS);
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw lastError ?? codedError('large_file_upload_metafs_failed', 'MetaFS chunked upload failed.');
+}
 function inferMetafileExtension(input) {
     return (0, metafileUri_1.extensionFromContentType)(input.contentType) ?? (0, metafileUri_1.safeMetafileExtension)(input.extension) ?? '';
 }
@@ -243,6 +302,7 @@ function buildResult(input) {
         downloadUrl: urls.downloadUrl,
         globalMetaId: input.globalMetaId,
         uploadMode: 'chunked',
+        ...(input.feeAssist ? { feeAssist: input.feeAssist } : {}),
     };
 }
 function ensureFundingError(error, fallbackMessage) {
@@ -334,8 +394,67 @@ function createMetaFsLargeUploader(options = {}) {
             catch (error) {
                 ensureFundingError(error, 'Failed to resolve wallet spend queue for large upload');
             }
+            const chunkedUploadContext = {
+                fetchFn,
+                baseUrl,
+                metaId,
+                address,
+                fileName: input.fileName,
+                uploadPath,
+                contentType: metaFsContentType,
+                feeRate,
+                storageKey,
+            };
             try {
                 return await (0, spendQueue_1.withWalletSpendQueue)(queueKey, async () => {
+                    // Sponsor-first (traffic/quota) funding: try to land the merge
+                    // transaction on the sponsor service before spending wallet UTXOs,
+                    // mirroring the sponsored direct-upload path. Every pre-commit
+                    // sponsor failure falls through to the wallet path below; after the
+                    // sponsor commits the merge transaction, failures are terminal (the
+                    // anchor UTXO is already spent on-chain and a wallet retry could
+                    // double-spend it).
+                    let sponsorFallback = null;
+                    if (input.mvcSponsorClient) {
+                        try {
+                            const utxos = await fetchMvcFundingUtxos({ fetchFn, address });
+                            const funding = await (0, mvcSponsorLargeUploadFunding_1.sponsorMvcLargeUploadFunding)({
+                                identity,
+                                address,
+                                feeRate,
+                                chunkPreTxFee,
+                                indexPreTxFee,
+                                utxos,
+                                sponsorClient: input.mvcSponsorClient,
+                            });
+                            const indexTxId = await submitChunkedUploadWithRetry({
+                                context: {
+                                    ...chunkedUploadContext,
+                                    chunkPreTxHex: funding.chunkPreTxHex,
+                                    indexPreTxHex: funding.indexPreTxHex,
+                                    mergeTxHex: funding.mergeTxHex,
+                                },
+                                sleep,
+                            });
+                            (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
+                                address,
+                                spentUtxos: funding.spentUtxos,
+                                createdUtxos: funding.createdUtxos,
+                            });
+                            return buildResult({
+                                uploadInput: input,
+                                indexTxId,
+                                totalCost: chunkPreTxFee + indexPreTxFee + funding.sponsoredMinerFee,
+                                globalMetaId,
+                                feeAssist: funding.feeAssist,
+                            });
+                        }
+                        catch (error) {
+                            if (!(0, mvcSponsorLargeUploadFunding_1.isMvcSponsorLargeUploadFallbackError)(error))
+                                throw error;
+                            sponsorFallback = error.sponsorFallback;
+                        }
+                    }
                     const excludedOutpoints = new Set();
                     let lastError = null;
                     for (let attempt = 1; attempt <= RETRYABLE_ATTEMPTS; attempt += 1) {
@@ -356,32 +475,12 @@ function createMetaFsLargeUploader(options = {}) {
                             catch (error) {
                                 throw codedError('large_file_upload_funding_failed', getErrorMessage(error), error);
                             }
-                            const uploadResult = await postMetaFsJson({
-                                fetchFn,
-                                baseUrl,
-                                path: '/api/v1/files/chunked-upload',
-                                body: {
-                                    metaId,
-                                    address,
-                                    fileName: input.fileName,
-                                    path: uploadPath,
-                                    operation: 'create',
-                                    contentType: metaFsContentType,
-                                    chunkPreTxHex: funding.chunkPreTxHex,
-                                    indexPreTxHex: funding.indexPreTxHex,
-                                    mergeTxHex: funding.mergeTxHex,
-                                    feeRate,
-                                    isBroadcast: true,
-                                    storageKey,
-                                },
+                            const indexTxId = await submitChunkedUpload({
+                                ...chunkedUploadContext,
+                                chunkPreTxHex: funding.chunkPreTxHex,
+                                indexPreTxHex: funding.indexPreTxHex,
+                                mergeTxHex: funding.mergeTxHex,
                             });
-                            if (uploadResult?.status && uploadResult.status !== 'success') {
-                                throw codedError('large_file_upload_metafs_failed', normalizeText(uploadResult.message) || `MetaFS chunked upload returned status ${uploadResult.status}.`);
-                            }
-                            const indexTxId = normalizeText(uploadResult?.indexTxId) || normalizeText(uploadResult?.txId);
-                            if (!indexTxId) {
-                                throw codedError('large_file_upload_metafs_failed', 'MetaFS chunked upload did not return indexTxId/txId.');
-                            }
                             (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
                                 address,
                                 spentUtxos: funding.spentUtxos,
@@ -392,6 +491,7 @@ function createMetaFsLargeUploader(options = {}) {
                                 indexTxId,
                                 totalCost: calculateTotalCost(funding),
                                 globalMetaId,
+                                ...(sponsorFallback ? { feeAssist: buildSponsorFallbackFeeAssist(sponsorFallback) } : {}),
                             });
                         }
                         catch (error) {

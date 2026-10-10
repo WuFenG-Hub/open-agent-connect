@@ -11,6 +11,13 @@ export interface MvcLargeUploadFundingResult {
     spentOutpoints: string[];
     changeUtxo: ChainUtxo | null;
 }
+export declare function buildMvcLargeUploadPreTx(input: {
+    mergeTxId: string;
+    outputIndex: number;
+    satoshis: number;
+    address: string;
+    privateKey: unknown;
+}): string;
 export declare function buildMvcLargeUploadFunding(input: {
     identity: DerivedIdentity;
     address?: string;
