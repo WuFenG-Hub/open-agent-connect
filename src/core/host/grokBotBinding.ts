@@ -116,6 +116,15 @@ export function isGrokBotBound(binding: GrokBotBinding): boolean {
   return Boolean(binding.assistantId);
 }
 
+/** Convenience predicate for hot paths: unreadable/missing record → not bound. */
+export async function isGrokBotBoundProfile(bindingPath: string): Promise<boolean> {
+  try {
+    return isGrokBotBound(await readGrokBotBinding(bindingPath));
+  } catch {
+    return false;
+  }
+}
+
 export interface RedactedGrokBotBinding extends Omit<GrokBotBinding, 'webhook'> {
   webhook: (Omit<GrokBotWebhookConfig, 'secret'> & { secretConfigured: boolean }) | null;
 }

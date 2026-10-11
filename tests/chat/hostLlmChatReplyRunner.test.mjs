@@ -741,6 +741,49 @@ test('host LLM chat runner skips instead of template fallback when disabled', as
   assert.deepEqual(result, { state: 'skip' });
 });
 
+test('host LLM chat runner resolves a function-form allowTemplateFallback per turn', async () => {
+  const runtime = {
+    id: 'llm-runtime-1',
+    provider: 'codex',
+    displayName: 'Codex',
+    binaryPath: '/bin/codex',
+    authState: 'authenticated',
+    health: 'healthy',
+    capabilities: ['streaming'],
+    lastSeenAt: '2026-05-05T00:00:00.000Z',
+    createdAt: '2026-05-05T00:00:00.000Z',
+    updatedAt: '2026-05-05T00:00:00.000Z',
+  };
+  const llmExecutor = {
+    async execute() {
+      return 'llm-session-failed';
+    },
+    async getSession(sessionId) {
+      return {
+        sessionId,
+        status: 'failed',
+        result: { status: 'failed', output: '', error: 'backend failed', durationMs: 1 },
+      };
+    },
+  };
+
+  let allow = true;
+  const runner = createHostLlmChatReplyRunner({
+    runtimeResolver: createFakeRuntimeResolver(runtime),
+    llmExecutor,
+    metaBotSlug: 'alice',
+    pollIntervalMs: 1,
+    allowTemplateFallback: async () => allow,
+  });
+
+  const withTemplates = await runner(makeInput({ inboundMessage: null }));
+  assert.equal(withTemplates.state, 'reply');
+
+  allow = false;
+  const suppressed = await runner(makeInput({ inboundMessage: null }));
+  assert.deepEqual(suppressed, { state: 'skip' });
+});
+
 test('host LLM chat runner skips instead of template fallback when operator guidance is present', async () => {
   const runtime = {
     id: 'llm-runtime-1',

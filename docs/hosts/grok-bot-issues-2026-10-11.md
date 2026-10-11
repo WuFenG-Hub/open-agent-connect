@@ -84,3 +84,22 @@
 4. 长 surf：watchdog 触发时仍有完整或 partial `reportMarkdown`，且 liked/commented 与链上收据一致。
 5. daemon 重启后不应出现永久 `running` 僵尸 run。
 
+
+---
+
+## 处置记录（2026-10-11，OAC 侧）
+
+- P0-1：已修。CLI `dream run` 补上与 daemon 相同的 Grok Bot Webhook LLM 层。
+- P0-2/P0-3：已修。新增按 messageId 的投递尝试台账（上限 3 次，随 backfill 轮次自然退避）；只有 `delivered` 或「放弃」才标记已接力；失败记录截断的响应正文。修复前已处理的旧消息最多再重投一次即被记录去重。
+- P0-4：已修。watchdog 超时时用链上回执确定性生成 partial 报告（互动数与收据一致），不再整轮 failed 无报告。
+- P1-5：被 P0-2/3 覆盖。
+- P1-6：文档说明——`surf status` 统计在 run 结束落定时更新（收据在 commit 阶段折入）。
+- P1-7：已修。`recoverAfterRestart` 原先无调用方；现 daemon 启动按全部 profile 清扫，且每次新 run 启动前也扫。
+- P1-8：已修。`OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS` 可配；网络层错误重试一次，HTTP 拒绝仍为终态。
+- P1-9：已修。`parseJsonFence` 优先贪婪匹配最后一个 ```json 块，内嵌 markdown 围栏的 payload 可解析。
+
+## 追加问题（2026-10-11 晚，私聊模板垃圾回复）
+
+- **现象**：Grok Bot 助手（Peddy）与 AI_Sunny 私聊时，Peddy 侧每条都回 `You are a helpful AI assistant...` 模板文本。
+- **根因**：Peddy 所在云端机器无任何本地 LLM，且当时未接 Webhook，OAC 自动回复回落到内置模板 runner（默认 persona）。未真正调用任何 LLM。
+- **修复**：已绑定 Grok Bot 的 profile 在未接 Webhook 时不再发送模板回复——保持沉默、消息留在链上（doctor 标记未接通）。模板回落的开关改为可按 profile 状态动态判定（`allowTemplateFallback` 支持函数形式）。`hostLlmChatReplyRunner` 有回归测试。

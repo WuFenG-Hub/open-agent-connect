@@ -37,6 +37,7 @@ import {
   getGrokBotBindingStatus,
   GrokBotBindingError,
   isGrokBotBound,
+  isGrokBotBoundProfile,
   readGrokBotBinding,
   unbindGrokBotAssistant,
 } from '../core/host/grokBotBinding';
@@ -1974,6 +1975,11 @@ export function createPrivateChatReplyRunnerForProfile(input: {
     llmExecutor: input.llmExecutor,
     metaBotSlug: input.metaBotSlug,
     hostLlmGenerate: createDshPairHostLlmGenerate({ dshLlmPath: input.paths.dshLlmPath }),
+    // A Grok Bot-bound profile whose webhook is not wired must never emit
+    // canned template replies on-chain: with no local LLM the honest outcome
+    // is silence (the message stays on-chain; the doctor marks the assistant
+    // not_connected). Read per turn so a later `binding bind` applies live.
+    allowTemplateFallback: async () => !(await isGrokBotBoundProfile(input.paths.grokBotBindingPath)),
     chatWorkspaceDir: path.join(input.paths.profileRoot, '.runtime', 'private-chat-work'),
     requestAvailabilityRecovery: () => {
       activeLlmAvailabilityRecovery?.requestSoon(input.paths.profileRoot);
