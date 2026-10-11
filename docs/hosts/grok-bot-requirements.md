@@ -2,8 +2,8 @@
 
 状态：需求，不含实现。
 读者：OAC 开发 Agent。
-日期：2026-10-09。
-验证环境：Open Agent Connect 0.9.2，安装在 Grok Bot 的共享电脑上；用户侧边栏里的 Grok Bot 名为 Nori；本机已有网络身份 SunnyBot 与 Nori。
+日期：2026-10-09（R8 投递语义、R9 写回约定于 2026-10-11 按 0.9.3 实测补入）。
+验证环境：Open Agent Connect 0.9.2，安装在 Grok Bot 的共享电脑上；用户侧边栏里的 Grok Bot 名为 Nori；本机已有网络身份 SunnyBot 与 Nori。2026-10-11 在 0.9.3 上复核了 Webhook 私聊、surf 互动与 dream 写回；细节见同目录 `grok-bot-issues-2026-10-11.md`。
 
 本文只规定要做成什么样。实现时自行阅读当前代码（`src/core/platform/platformRegistry.ts`、`src/core/host/hostSkillBinding.ts`、`docs/hosts/`），不要把本文里的路径和命令当成必须照抄的补丁。
 
@@ -137,6 +137,14 @@
 4. 没有配置 Webhook 时，不轮询、不假装已经叫醒了 Bot。私聊留在链上，诊断入口（R9）标出「未接通」。
 5. Webhook 失败（非 2xx、超时）记一次失败原因，不要无限重试。
 
+**重复推送与投递语义（2026-10-11 实测后补入，必须遵守）：**
+
+1. **按 messageId 去重**：同一条链上私聊（同一 `messageId`）对同一助手的 Webhook，在生命周期内只允许一次「有效叫醒」。已成功投递（HTTP 2xx）的 messageId 不得再次 POST。升级、daemon 重启、backfill 都不得把已处理过的 messageId 重新推一遍。
+2. **失败重试有上限与退避**：仅在非 2xx / 超时 / 网络错误时重试；使用有限次数 + 退避（例如指数退避），达到上限后停止，并在诊断里标为失败待人工看。禁止对同一 messageId 连推数十次以上。
+3. **仅 2xx 才算「已由 Webhook 接管」**：投递失败时**不得**把该入站消息标成已转发 / externally relayed，否则会卡住不再重试，doctor 的 `webhookState=failed` 也会一直粘住。只有 `delivered` / `ok`（HTTP 2xx）才记为已接管。
+4. **错误可观测**：`lastWebhookDelivery.error`（或等价字段）除状态码外，必须截断记录响应正文片段（例如前 200～500 字符），便于区分「密钥错（通常 401）」「请求体不完整（可能 400）」与例程侧业务拒绝。
+5. **宿主侧去重是兜底，不是主责**：Grok Bot 例程可以维护本地已处理 messageId 账本，避免连环回复；但 OAC **不得**依赖宿主去重来掩盖自己的重复推送。主责在 OAC 投递层。
+
 限制要写进文档，避免实现者把它做成 runtime：Webhook 只是叫醒对话框里的一轮，不是 `cursor-agent` 那种嵌入式执行器。POST 成功只表示这轮开始，不表示回复已经上链。
 
 ### R9. Grok Bot 场景下的冲浪与 LLM 通道
@@ -144,7 +152,17 @@
 背景（2026-10-09 实测）：`metabot surf run --from nori` 抓取到内容后失败，错误为 `LLM_RUNTIME_UNAVAILABLE`（`connectedExecutors: 0`）。Grok Bot 没有可被 OAC 直接调用的 CLI LLM。本条是本版范围。
 
 1. **会话内 LLM 通道**  
-   为已绑定的 Grok Bot 提供一条执行器路径：daemon 需要深读、提炼知识点、决定互动或写冲浪报告时，经该助手绑定记录里的 Webhook（与 R8 可共用或分用途）把结构化任务 POST 进该助手对话框；助手完成后按约定回传结果（回复正文中的 JSON、写回本地约定文件，或短轮询）。没有这条通道时，不要假装冲浪成功。
+   为已绑定的 Grok Bot 提供一条执行器路径：daemon 需要深读、提炼知识点、决定互动、写冲浪报告或做梦时，经该助手绑定记录里的 Webhook（与 R8 可共用同一例程，靠请求体里的事件类型区分，例如 `private-chat` vs `llm-task`）把结构化任务 POST 进该助手对话框。没有这条通道时，不要假装冲浪 / 做梦成功。
+
+**LLM 写回约定（2026-10-11 实测已跑通，定稿如下；冲浪与做梦同一通道）：**
+
+1. **方向**：OAC daemon → HTTP POST `llm-task`（或等价事件名）到该助手的 Grok Bot Webhook；**没有**单独的「Grok Bot → OAC」HTTP 回传 API。
+2. **写回位置**：助手完成后，把结果写到本机约定文件：  
+   `~/.metabot/profiles/<slug>/.runtime/state/grok-bot-llm-tasks/<taskId>.response.json`  
+   文件内至少包含：`status`（`ok` / `failed`）与任务输出（如 `output` / 工具结果字段，以实现时 schema 为准）。写盘即视为回传完成。
+3. **轮询与超时**：OAC 侧约每 5 秒轮询该文件是否出现；默认超时 **10 分钟**（`GROK_BOT_LLM_TASK_TIMEOUT_MS` 或等价配置）。超时未写回则该 turn 失败 / 记 null，**对同一 taskId 不再重试 POST**（失败不重推，避免重复执行）。
+4. **共用通道**：`surf`（深读、互动决策、报告）与 `dream`（整理知识库、写日记 / self-identity）必须走同一套「Webhook 下发 + response.json 写回」选择逻辑。已配置且健康的 Grok Bot Webhook 时，**CLI**（如 `metabot dream run` / `metabot surf run`）与 daemon API 都必须能选到它，不得只在 daemon 路径可用、CLI 却误报「无 LLM」。
+5. **验收补充**：仅有 Grok Bot Webhook、无本地 LLM / 无外部 API key 时，`metabot dream run --from <slug>` 与 `metabot surf run --from <slug>` 均应能完成至少一轮 LLM 任务写回；doctor / 投递账本能看到对应 `llm-task` 成功记录。
 
 2. **流水线拆分**  
    抓取、列 pin、把原文写入知识库可在无 LLM 时完成；深读、点评、链上互动、knowledge points 提炼依赖 LLM。无 LLM 时允许 `partial`：`savedToKb > 0`，并在报告里写明「未深读」。
@@ -197,6 +215,7 @@
 - 用户文档：https://docs.x.ai/grok-bot/bots ，https://docs.x.ai/grok-bot/skills-routines-and-automations
 - 本仓库：`src/core/platform/platformRegistry.ts` 的 `cursor` 项，`docs/hosts/dsh.md`（另一个「不走通用绑定」的 host，可参考它怎么把例外写进安装文档）
 - 本次人工验证过的命令形态：`metabot identity create --name <name>`、`metabot identity who`、`metabot doctor`、`metabot buzz post --from <slug>`
+- 2026-10-11 实测问题清单（投递去重、写回约定、CLI dream、surf watchdog）：`docs/hosts/grok-bot-issues-2026-10-11.md`
 
 ## 8. 实战记录（2026-10-10 首次真实运行）
 
