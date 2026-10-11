@@ -95,16 +95,40 @@ function profileDirOf(ctx: HostContext): string | undefined {
 }
 
 /**
+ * The package directory of this DSH installation, derived from
+ * `profileContext.installAnchor` (the absolute path of the installation's own
+ * `package.json`, e.g. `<runtime>/node_modules/@deepseek-ai/dsh/package.json`).
+ *
+ * The profile anchor only reaches a host that installs the kernel packages into
+ * the profile's `node_modules`. The DSH desktop app instead packs them inside
+ * `app.asar` and composes the profile from that installation scope, so
+ * resolution has to start here — walking up from the package directory reaches
+ * the installation's `node_modules`.
+ */
+function installAnchorDirOf(ctx: HostContext): string | undefined {
+  try {
+    const profileContext = ctx.get?.('profileContext')
+    if (isRecord(profileContext) && typeof profileContext.installAnchor === 'string') {
+      return dirname(profileContext.installAnchor)
+    }
+  } catch {
+    // No install anchor on this host line — fall through to the own-location anchor.
+  }
+  return undefined
+}
+
+/**
  * Locate the host installation's shipped `standard` preset declaration. The
- * profile anchor serves production installs (and dev `link:` mounts, where the
- * plugin realpath escapes the profile); the plugin's own location resolves the
- * devDependency copy in this repository's checkout and is converted from the
- * module URL to a path so it stays independent of the process working
- * directory.
+ * profile anchor serves CLI installs (and dev `link:` mounts, where the plugin
+ * realpath escapes the profile); the installation anchor serves hosts that ship
+ * the kernel outside the profile (the DSH desktop app's `app.asar`); the
+ * plugin's own location resolves the devDependency copy in this repository's
+ * checkout and is converted from the module URL to a path so it stays
+ * independent of the process working directory.
  */
 function resolveStandardPatchPath(ctx: HostContext): string | undefined {
   const require = createRequire(import.meta.url)
-  const anchors = [profileDirOf(ctx), dirname(fileURLToPath(import.meta.url))]
+  const anchors = [profileDirOf(ctx), installAnchorDirOf(ctx), dirname(fileURLToPath(import.meta.url))]
   for (const anchor of anchors) {
     if (anchor === undefined) continue
     try {
@@ -147,7 +171,7 @@ function findStandardDeclaration(parsed: unknown, at: string): HostPresetEntry {
 export async function readStandardPresetPlugins(ctx: HostContext): Promise<HostPresetEntry[]> {
   const patchPath = resolverOverride !== undefined ? await resolverOverride() : resolveStandardPatchPath(ctx)
   if (patchPath === undefined) {
-    throw new Error(`oac-dsh: cannot resolve ${STANDARD_PATCH_SPEC} from the profile or the plugin install`)
+    throw new Error(`oac-dsh: cannot resolve ${STANDARD_PATCH_SPEC} from the profile, the installation, or the plugin install`)
   }
   const parsed: unknown = yaml.load(await readFile(patchPath, 'utf8'), { schema: entryListSchema })
   const declaration = findStandardDeclaration(parsed, patchPath)
