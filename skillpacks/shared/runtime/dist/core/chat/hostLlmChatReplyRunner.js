@@ -497,7 +497,13 @@ function createHostLlmChatReplyRunner(options) {
     const allowedChatSkillsResolver = options?.allowedChatSkillsResolver;
     const chatWorkspaceDir = normalizeText(options?.chatWorkspaceDir);
     const logWarning = options?.logWarning;
-    const allowTemplateFallback = options?.allowTemplateFallback ?? true;
+    const allowTemplateFallbackOption = options?.allowTemplateFallback ?? true;
+    // Resolved per turn: hosts can gate the template fallback on live profile
+    // state (a Grok Bot-bound profile without its webhook must never emit
+    // canned template replies).
+    const resolveAllowTemplateFallback = async () => typeof allowTemplateFallbackOption === 'function'
+        ? await allowTemplateFallbackOption()
+        : allowTemplateFallbackOption;
     const hostLlmGenerate = options?.hostLlmGenerate;
     const fallbackRunner = (0, defaultChatReplyRunner_1.createDefaultChatReplyRunner)();
     // Remember the runtime that produced the last successful reply and try it
@@ -575,7 +581,7 @@ function createHostLlmChatReplyRunner(options) {
             const hostResult = await runHostGeneration(input, (0, privateChatAllowedSkills_1.emptyPrivateChatAllowedSkillScope)());
             if (hostResult)
                 return hostResult;
-            return allowTemplateFallback && !normalizeText(input.operatorGuidanceText)
+            return (await resolveAllowTemplateFallback()) && !normalizeText(input.operatorGuidanceText)
                 ? fallbackRunner(input)
                 : { state: 'skip' };
         };
@@ -594,7 +600,7 @@ function createHostLlmChatReplyRunner(options) {
         const prompt = buildChatPrompt(input, allowedSkillScope, { metaBotSlug });
         const systemPrompt = buildChatSystemPrompt(input);
         const excludeRuntimeIds = new Set();
-        const templateFallbackAllowedForTurn = allowTemplateFallback
+        const templateFallbackAllowedForTurn = (await resolveAllowTemplateFallback())
             && !normalizeText(input.operatorGuidanceText);
         const turnState = { attemptedExecution: false };
         if (chatWorkspaceDir) {

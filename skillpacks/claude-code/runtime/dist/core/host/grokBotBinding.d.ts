@@ -27,6 +27,8 @@ export declare class GrokBotBindingError extends Error {
 export declare function normalizeGrokBotBinding(value: unknown): GrokBotBinding;
 export declare function isGrokBotBindingEmpty(binding: GrokBotBinding): boolean;
 export declare function isGrokBotBound(binding: GrokBotBinding): boolean;
+/** Convenience predicate for hot paths: unreadable/missing record → not bound. */
+export declare function isGrokBotBoundProfile(bindingPath: string): Promise<boolean>;
 export interface RedactedGrokBotBinding extends Omit<GrokBotBinding, 'webhook'> {
     webhook: (Omit<GrokBotWebhookConfig, 'secret'> & {
         secretConfigured: boolean;

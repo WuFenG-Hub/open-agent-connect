@@ -7,6 +7,7 @@ exports.GrokBotBindingError = exports.GROK_BOT_HOST_ID = void 0;
 exports.normalizeGrokBotBinding = normalizeGrokBotBinding;
 exports.isGrokBotBindingEmpty = isGrokBotBindingEmpty;
 exports.isGrokBotBound = isGrokBotBound;
+exports.isGrokBotBoundProfile = isGrokBotBoundProfile;
 exports.redactGrokBotBinding = redactGrokBotBinding;
 exports.grokBotBindingPathForProfile = grokBotBindingPathForProfile;
 exports.readGrokBotBinding = readGrokBotBinding;
@@ -96,6 +97,15 @@ function isGrokBotBindingEmpty(binding) {
 }
 function isGrokBotBound(binding) {
     return Boolean(binding.assistantId);
+}
+/** Convenience predicate for hot paths: unreadable/missing record → not bound. */
+async function isGrokBotBoundProfile(bindingPath) {
+    try {
+        return isGrokBotBound(await readGrokBotBinding(bindingPath));
+    }
+    catch {
+        return false;
+    }
 }
 /** Command-result view: the bearer token never leaves the local state file. */
 function redactGrokBotBinding(binding) {

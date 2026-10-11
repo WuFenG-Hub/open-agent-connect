@@ -25,7 +25,7 @@ export declare function createHostLlmChatReplyRunner(options?: {
     pollIntervalMs?: number;
     allowedChatSkillsResolver?: PrivateChatAllowedSkillsResolver;
     logWarning?: (scope: string, message: string) => void;
-    allowTemplateFallback?: boolean;
+    allowTemplateFallback?: boolean | (() => Promise<boolean>);
     /**
      * Working directory for chat reply turns. Allowed chat skills run with the
      * host's normal environment (IDBots-style), so they need a stable per-profile

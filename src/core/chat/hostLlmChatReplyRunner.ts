@@ -596,7 +596,7 @@ export function createHostLlmChatReplyRunner(options?: {
   pollIntervalMs?: number;
   allowedChatSkillsResolver?: PrivateChatAllowedSkillsResolver;
   logWarning?: (scope: string, message: string) => void;
-  allowTemplateFallback?: boolean;
+  allowTemplateFallback?: boolean | (() => Promise<boolean>);
   /**
    * Working directory for chat reply turns. Allowed chat skills run with the
    * host's normal environment (IDBots-style), so they need a stable per-profile
@@ -627,7 +627,14 @@ export function createHostLlmChatReplyRunner(options?: {
   const allowedChatSkillsResolver = options?.allowedChatSkillsResolver;
   const chatWorkspaceDir = normalizeText(options?.chatWorkspaceDir);
   const logWarning = options?.logWarning;
-  const allowTemplateFallback = options?.allowTemplateFallback ?? true;
+  const allowTemplateFallbackOption = options?.allowTemplateFallback ?? true;
+  // Resolved per turn: hosts can gate the template fallback on live profile
+  // state (a Grok Bot-bound profile without its webhook must never emit
+  // canned template replies).
+  const resolveAllowTemplateFallback = async (): Promise<boolean> =>
+    typeof allowTemplateFallbackOption === 'function'
+      ? await allowTemplateFallbackOption()
+      : allowTemplateFallbackOption;
   const hostLlmGenerate = options?.hostLlmGenerate;
   const fallbackRunner = createDefaultChatReplyRunner();
   // Remember the runtime that produced the last successful reply and try it
@@ -706,7 +713,7 @@ export function createHostLlmChatReplyRunner(options?: {
     return async (input: ChatReplyRunnerInput): Promise<ChatReplyRunnerResult> => {
       const hostResult = await runHostGeneration(input, emptyPrivateChatAllowedSkillScope());
       if (hostResult) return hostResult;
-      return allowTemplateFallback && !normalizeText(input.operatorGuidanceText)
+      return (await resolveAllowTemplateFallback()) && !normalizeText(input.operatorGuidanceText)
         ? fallbackRunner(input)
         : { state: 'skip' };
     };
@@ -725,7 +732,7 @@ export function createHostLlmChatReplyRunner(options?: {
     const prompt = buildChatPrompt(input, allowedSkillScope, { metaBotSlug });
     const systemPrompt = buildChatSystemPrompt(input);
     const excludeRuntimeIds = new Set<string>();
-    const templateFallbackAllowedForTurn = allowTemplateFallback
+    const templateFallbackAllowedForTurn = (await resolveAllowTemplateFallback())
       && !normalizeText(input.operatorGuidanceText);
     const turnState = { attemptedExecution: false };
 
