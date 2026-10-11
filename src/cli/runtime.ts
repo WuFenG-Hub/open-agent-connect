@@ -40,7 +40,7 @@ import {
   readGrokBotBinding,
   unbindGrokBotAssistant,
 } from '../core/host/grokBotBinding';
-import { deliverGrokBotPrivateChat } from '../core/host/grokBotWebhook';
+import { deliverGrokBotPrivateChat, type GrokBotWebhookDeliveryOutcome } from '../core/host/grokBotWebhook';
 import { createGrokBotWebhookCompletion } from '../core/host/grokBotLlmChannel';
 import { runSurfNoLlmKbIngest } from '../core/surf/noLlmIngest';
 import { uploadLocalFileToChain } from '../core/files/uploadFile';
@@ -2456,10 +2456,15 @@ export function createPrivateChatAutoReplyProfileDispatcher(
       if (!orchestrator) return;
       if (!input.handleOrderProtocolMessageForProfile) {
         const genericMessage = normalizeDispatcherPrivateChatMessage(message);
-        if (classifySimplemsgContent(message.content).kind !== 'order_protocol'
-          && await routeInboundViaGrokBotWebhook(profile.homeDir, genericMessage)) {
-          await orchestrator.recordExternallyRelayedInbound?.(genericMessage, 'grok-bot-webhook')?.catch(() => undefined);
-          return;
+        if (classifySimplemsgContent(message.content).kind !== 'order_protocol') {
+          const relay = await routeInboundViaGrokBotWebhook(profile.homeDir, genericMessage);
+          if (relay === 'delivered' || relay === 'gave_up') {
+            await orchestrator.recordExternallyRelayedInbound?.(genericMessage, 'grok-bot-webhook')?.catch(() => undefined);
+            return;
+          }
+          if (relay === 'failed') {
+            return;
+          }
         }
         await orchestrator.handleInboundMessage(message);
         return;
@@ -2471,8 +2476,12 @@ export function createPrivateChatAutoReplyProfileDispatcher(
           orderMessage,
         ),
         handleGenericPrivateChatMessage: async (genericMessage) => {
-          if (await routeInboundViaGrokBotWebhook(profile.homeDir, genericMessage)) {
+          const relay = await routeInboundViaGrokBotWebhook(profile.homeDir, genericMessage);
+          if (relay === 'delivered' || relay === 'gave_up') {
             await orchestrator.recordExternallyRelayedInbound?.(genericMessage, 'grok-bot-webhook')?.catch(() => undefined);
+            return;
+          }
+          if (relay === 'failed') {
             return;
           }
           await orchestrator.handleInboundMessage(genericMessage);
@@ -2775,20 +2784,21 @@ async function runGrokBotBinding(
 }
 
 /**
- * Returns true when the profile's Grok Bot binding took over the message
- * (delivered to the assistant's dialog webhook, or delivery attempted and
- * failed — recorded, never retried). false means "no webhook configured":
- * the caller falls back to the normal local reply path.
+ * Outcome-driven routing for the Grok Bot relay: 'delivered' and 'gave_up'
+ * mean the relay owns the message (record it as handled); 'failed' means this
+ * attempt failed — the message stays unrecorded so the backfill sweep retries
+ * it (bounded by the webhook attempt ledger); 'not_configured' falls back to
+ * the normal local reply path. An unreadable binding also falls back.
  */
 async function routeInboundViaGrokBotWebhook(
   homeDir: string,
   message: PrivateChatInboundMessage,
-): Promise<boolean> {
+): Promise<GrokBotWebhookDeliveryOutcome> {
   try {
-    return (await deliverGrokBotPrivateChat({ homeDir, message })) !== 'not_configured';
+    return await deliverGrokBotPrivateChat({ homeDir, message });
   } catch (error) {
     console.warn('[grok-bot webhook]', error instanceof Error ? error.message : String(error));
-    return false;
+    return 'not_configured';
   }
 }
 
@@ -5350,6 +5360,20 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
               : {}),
           });
           if (hostText !== null) return hostText;
+          // Grok Bot-bound profiles delegate through the assistant's routine
+          // webhook (same llm-task channel the daemon dream handler uses).
+          const grokBotText = await createGrokBotWebhookCompletion({
+            homeDir: paths.profileRoot,
+            timeoutMs: 180_000,
+          })({
+            botSlug: slug,
+            system: request.system,
+            user: request.user,
+            ...(Number.isFinite(request.maxOutputTokens) && request.maxOutputTokens > 0
+              ? { maxTokens: request.maxOutputTokens }
+              : {}),
+          });
+          if (grokBotText !== null) return grokBotText;
           const resolved = await runtimeResolver.resolveRuntime({ metaBotSlug: slug });
           if (!resolved.runtime) {
             throw new Error(
@@ -7037,6 +7061,34 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
       // receipt folding) still records a classified session-stage failure.
       const tagged = err as Error & { surfFailure?: SurfRunFailure };
       if (!tagged.surfFailure) tagged.surfFailure = toSurfRunFailure(err, 'session');
+      // Watchdog timeout: the wall-clock budget died mid-loop, but everything
+      // already done is real. Flush a deterministic report from receipts
+      // instead of failing the run with no report at all.
+      if (tagged.surfFailure.code === 'WATCHDOG_TIMEOUT') {
+        const partial = surfSessionPartialStats(writeState);
+        if (Object.keys(partial).length > 0) {
+          const receiptActions = surfReceiptSeenActions(writeState);
+          const countOf = (action: string) => receiptActions.filter((entry) => entry.action === action).length;
+          return {
+            stats: partial,
+            reportMarkdown: [
+              '# Surf report (partial — watchdog timeout)',
+              '',
+              'This run hit its wall-clock budget before the final report turn. The numbers below come from receipts, not an LLM summary.',
+              '',
+              `- fetched (briefing): ${surfContext.briefing.items.length}`,
+              `- deep-read: ${partial.deepRead ?? 0}`,
+              `- saved to KB: ${partial.savedToKb ?? 0}`,
+              `- liked: ${countOf('liked')}, commented: ${countOf('commented')}, answered: ${countOf('answered')}, posted: ${countOf('posted')}, challenged: ${countOf('challenged')}`,
+              `- scheduled tasks: ${partial.tasksScheduled ?? 0}`,
+              '',
+              'Re-run surf to finish the remaining backlog; the seen ledger already covers what was read and interacted with.',
+            ].join('\n'),
+            reportJson: JSON.stringify({ partial: true, reason: 'watchdog_timeout', ...partial }),
+            seenActions: foldSurfReceiptsIntoSeenActions([], writeState),
+          };
+        }
+      }
       // Grok Bot machines have no local LLM at all: when every LLM channel is
       // unavailable, still land the deterministic half of the pipeline — file
       // the briefed pins into the KB raw — and close the run as partial
@@ -7572,8 +7624,12 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   const simplemsgInboundDispatcher = buildA2ASimplemsgInboundDispatcher({
     handleOrderProtocolMessage: handlers.services?.handleInboundOrderProtocolMessage,
     handleGenericPrivateChatMessage: async (message) => {
-      if (await routeInboundViaGrokBotWebhook(homeDir, message)) {
+      const relay = await routeInboundViaGrokBotWebhook(homeDir, message);
+      if (relay === 'delivered' || relay === 'gave_up') {
         await chatAutoReplyOrchestrator.recordExternallyRelayedInbound?.(message, 'grok-bot-webhook')?.catch(() => undefined);
+        return;
+      }
+      if (relay === 'failed') {
         return;
       }
       await chatAutoReplyOrchestrator.handleInboundMessage(message);
@@ -8303,6 +8359,15 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
     )
     : null;
   void metataskWatchTickLoop;
+
+  // Surf crash recovery at boot: orphaned `running` rows from a previous
+  // daemon life become failed for every profile — not just the next one a
+  // status/run call happens to touch.
+  void Promise.resolve(handlers.surf?.recoverAfterRestart?.() ?? 0).then((recovered) => {
+    if (typeof recovered === 'number' && recovered > 0) {
+      groupTaskEngineLog(`[surf] swept ${recovered} stale running run(s) left by a previous daemon process`);
+    }
+  }).catch(() => undefined);
 
   const dreamAutomationTickLoop = handlers.dream && handlers.memory && handlers.surf
     ? startAutomationTickLoop(

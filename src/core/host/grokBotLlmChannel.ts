@@ -11,6 +11,14 @@ import { postGrokBotWebhook } from './grokBotWebhook';
 
 export const GROK_BOT_LLM_TASK_TIMEOUT_MS = 10 * 60_000;
 export const GROK_BOT_LLM_TASK_POLL_INTERVAL_MS = 5_000;
+/** Env override for the response-file wait window (slow cloud hosts). */
+export const GROK_BOT_LLM_TASK_TIMEOUT_ENV = 'OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS';
+
+function resolveTaskTimeoutMs(optionTimeoutMs: number | undefined): number {
+  if (optionTimeoutMs !== undefined) return optionTimeoutMs;
+  const fromEnv = Number(process.env[GROK_BOT_LLM_TASK_TIMEOUT_ENV]);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : GROK_BOT_LLM_TASK_TIMEOUT_MS;
+}
 
 export interface GrokBotLlmTaskResponse {
   taskId: string;
@@ -34,6 +42,7 @@ export function createGrokBotWebhookCompletion(options: {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   pollIntervalMs?: number;
+  retryDelayMs?: number;
   createTaskId?: () => string;
   now?: () => Date;
   logWarning?: (scope: string, message: string) => void;
@@ -78,7 +87,7 @@ export function createGrokBotWebhookCompletion(options: {
         createdAt,
       }, null, 2)}\n`, 'utf8');
 
-      const posted = await postGrokBotWebhook({
+      let posted = await postGrokBotWebhook({
         binding,
         payload: {
           type: 'llm-task',
@@ -93,6 +102,26 @@ export function createGrokBotWebhookCompletion(options: {
         fetchImpl: options.fetchImpl ?? fetch,
         timeoutMs: 15_000,
       });
+      // One bounded retry on network-level failure (a brief host stall must not
+      // break the whole turn); HTTP rejections are deliberate and final.
+      if (!posted.ok && !/^HTTP \d/.test(posted.error)) {
+        await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs ?? 5_000));
+        posted = await postGrokBotWebhook({
+          binding,
+          payload: {
+            type: 'llm-task',
+            host: 'grok-bot',
+            slug,
+            taskId,
+            system: request.system,
+            prompt: request.user,
+            responsePath,
+            createdAt,
+          },
+          fetchImpl: options.fetchImpl ?? fetch,
+          timeoutMs: 15_000,
+        });
+      }
       await recordGrokBotWebhookDelivery(bindingPath, {
         at: now().toISOString(),
         status: posted.ok ? 'ok' : 'failed',
@@ -105,7 +134,7 @@ export function createGrokBotWebhookCompletion(options: {
         return null;
       }
 
-      const timeoutMs = options.timeoutMs ?? GROK_BOT_LLM_TASK_TIMEOUT_MS;
+      const timeoutMs = resolveTaskTimeoutMs(options.timeoutMs);
       const pollIntervalMs = options.pollIntervalMs ?? GROK_BOT_LLM_TASK_POLL_INTERVAL_MS;
       const deadlineMs = Date.now() + timeoutMs;
       while (Date.now() < deadlineMs) {

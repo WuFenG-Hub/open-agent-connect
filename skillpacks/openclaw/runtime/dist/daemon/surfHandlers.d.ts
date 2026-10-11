@@ -31,9 +31,16 @@ export interface CreateSurfDaemonHandlersInput {
     metawebBaseUrl?: string;
     /** Structured log sink (engine log). */
     log?: (message: string) => void;
+    /** Every profile home on this machine — used by the boot-time stale-run sweep. */
+    listProfileHomeDirs?: () => Promise<string[]>;
 }
 export declare function createSurfDaemonHandlers(input: CreateSurfDaemonHandlersInput): {
-    /** Crash recovery at daemon boot: orphaned `running` rows become failed. */
+    /**
+     * Crash recovery at daemon boot: orphaned `running` rows become failed for
+     * EVERY profile with a surf store, not just the ones with a live service —
+     * services are created lazily, so a zombie left by a killed daemon
+     * otherwise survives until someone queries that exact bot.
+     */
     recoverAfterRestart: () => Promise<number>;
     status: (rawInput: {
         from?: string;

@@ -121,7 +121,30 @@ test('a failed webhook POST is recorded once and falls through as null', async (
   assert.equal(calls, 1);
   const binding = await readGrokBotBinding(grokBotBindingPathForProfile(homeDir));
   assert.equal(binding.lastWebhookDelivery.status, 'failed');
-  assert.equal(binding.lastWebhookDelivery.error, 'HTTP 503');
+  assert.equal(binding.lastWebhookDelivery.error, 'HTTP 503: down');
+});
+
+test('a network-level POST failure is retried once, then succeeds', async () => {
+  const { homeDir } = await createProfileHome('grok-llm-retry-');
+  await bindWithWebhook(homeDir);
+  let calls = 0;
+  const complete = createGrokBotWebhookCompletion({
+    homeDir,
+    createTaskId: () => 'task-5',
+    pollIntervalMs: 5,
+    timeoutMs: 5_000,
+    retryDelayMs: 1,
+    fetchImpl: async (_url, init) => {
+      calls += 1;
+      if (calls === 1) throw new Error('socket hang up');
+      const body = JSON.parse(init.body);
+      await fs.mkdir(path.dirname(body.responsePath), { recursive: true });
+      await fs.writeFile(body.responsePath, JSON.stringify({ taskId: body.taskId, status: 'ok', output: 'after retry' }), 'utf8');
+      return new Response('{}', { status: 200 });
+    },
+  });
+  assert.equal(await complete(REQUEST), 'after retry');
+  assert.equal(calls, 2);
 });
 
 test('no response file before the deadline resolves null and cleans up', async () => {

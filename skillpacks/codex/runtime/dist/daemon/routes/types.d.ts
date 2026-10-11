@@ -142,6 +142,8 @@ export interface MetabotDaemonHttpHandlers {
             from?: string;
             budget?: number;
         }) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Boot-time crash recovery: orphaned `running` surf rows become failed. */
+        recoverAfterRestart?: () => Awaitable<number>;
     };
     daemon?: {
         getStatus?: () => Awaitable<MetabotCommandResult<unknown>>;

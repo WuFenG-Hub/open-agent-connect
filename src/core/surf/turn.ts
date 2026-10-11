@@ -120,8 +120,26 @@ function truncateResult(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n…(truncated)`;
 }
 
-function parseJsonFence(reply: string): Record<string, unknown> | null {
-  const fences = [...String(reply ?? '').matchAll(/```(?:json)?\s*([\s\S]*?)```/gu)];
+export function parseJsonFence(reply: string): Record<string, unknown> | null {
+  const text = String(reply ?? '');
+  // Nested-fence robustness: a tool payload can itself contain markdown fences
+  // (e.g. knowledge_base_add_document content quoting code blocks). The lazy
+  // match closes at the FIRST inner fence and produces broken JSON, so first
+  // try the greedy span from the last ```json opener to the last closing fence.
+  const jsonOpeners = [...text.matchAll(/```json\s*\n/gu)];
+  const lastOpen = jsonOpeners[jsonOpeners.length - 1];
+  const lastClose = text.lastIndexOf('```');
+  if (lastOpen && lastClose > (lastOpen.index ?? 0) + lastOpen[0].length) {
+    try {
+      const parsed = JSON.parse(text.slice((lastOpen.index ?? 0) + lastOpen[0].length, lastClose)) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Fall through to the legacy lazy-match behavior.
+    }
+  }
+  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gu)];
   const last = fences[fences.length - 1];
   if (!last) return null;
   try {

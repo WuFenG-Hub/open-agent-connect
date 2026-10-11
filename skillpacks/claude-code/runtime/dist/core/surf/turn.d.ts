@@ -127,6 +127,7 @@ export interface SurfTurnDeps {
     maxSteps?: number;
     maxResultChars?: number;
 }
+export declare function parseJsonFence(reply: string): Record<string, unknown> | null;
 /**
  * Prepend the json-fence tool-loop contract (OAC's executor speaks fences,
  * not native tool calls) to the IDBots surf session prompt. The tool list

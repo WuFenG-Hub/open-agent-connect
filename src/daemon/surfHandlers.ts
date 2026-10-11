@@ -48,6 +48,8 @@ export interface CreateSurfDaemonHandlersInput {
   metawebBaseUrl?: string;
   /** Structured log sink (engine log). */
   log?: (message: string) => void;
+  /** Every profile home on this machine — used by the boot-time stale-run sweep. */
+  listProfileHomeDirs?: () => Promise<string[]>;
 }
 
 const SURF_READS_OPTIONS = (baseUrl?: string) => (baseUrl ? { baseUrl } : undefined);
@@ -149,11 +151,26 @@ export function createSurfDaemonHandlers(input: CreateSurfDaemonHandlersInput) {
   }
 
   return {
-    /** Crash recovery at daemon boot: orphaned `running` rows become failed. */
+    /**
+     * Crash recovery at daemon boot: orphaned `running` rows become failed for
+     * EVERY profile with a surf store, not just the ones with a live service —
+     * services are created lazily, so a zombie left by a killed daemon
+     * otherwise survives until someone queries that exact bot.
+     */
     recoverAfterRestart: async (): Promise<number> => {
       let recovered = 0;
-      for (const service of servicesByHome.values()) {
-        recovered += await service.recoverAfterRestart();
+      const homeDirs = input.listProfileHomeDirs
+        ? await input.listProfileHomeDirs().catch(() => [] as string[])
+        : [];
+      for (const homeDir of homeDirs) {
+        const liveRunId = servicesByHome.get(homeDir)?.currentRunId() ?? undefined;
+        recovered += await createMetawebSurfStore(resolveMetabotPaths(homeDir))
+          .failStaleRunningRuns({
+            error: 'Daemon restarted during surf run',
+            nowIso: new Date().toISOString(),
+            ...(liveRunId ? { excludeId: liveRunId } : {}),
+          })
+          .catch(() => 0);
       }
       return recovered;
     },
@@ -211,6 +228,15 @@ export function createSurfDaemonHandlers(input: CreateSurfDaemonHandlersInput) {
         ? rawInput.trigger
         : 'manual-ui';
       const service = serviceFor(bot);
+      // Sweep zombies before starting: a `running` row left by a killed daemon
+      // must not shadow the fresh run (the in-memory run of this process is
+      // excluded — concurrent runs refuse separately).
+      const runStore = createMetawebSurfStore(resolveMetabotPaths(bot.homeDir));
+      await runStore.failStaleRunningRuns({
+        error: 'Daemon restarted during surf run',
+        nowIso: new Date().toISOString(),
+        ...(service.currentRunId() != null ? { excludeId: service.currentRunId()! } : {}),
+      }).catch(() => 0);
       try {
         if (rawInput.wait === true) {
           const run = await service.runSurfAndWait(trigger);

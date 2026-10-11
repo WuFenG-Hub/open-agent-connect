@@ -105,8 +105,11 @@ reaches a bound assistant through its own routine webhook:
    private-chat skill (`metabot chat private --from <slug>`) under the
    assistant's normal confirmation
    rules — nothing is auto-sent just because the webhook fired.
-4. Delivery is a single attempt: non-2xx or network failure is recorded once
-   on the binding ledger (`host binding doctor` shows it) and never retried.
+4. Delivery is bounded: a failed attempt records the error (including a
+   truncated response-body excerpt) on the binding ledger and is retried by
+   the next backfill sweep, up to 3 attempts per message; only a `delivered`
+   (or exhausted) message is marked as relayed, so a message is never both
+   retried forever and never silently dropped. `webhook --clear` disconnects.
    Without a configured webhook the message simply stays on-chain and the
    doctor marks the assistant `not_configured`; OAC never polls and never
    pretends the assistant was woken.
@@ -122,14 +125,20 @@ daemon POSTs an `llm-task` envelope (task id, system, prompt, response file
 path) to the same routine webhook, and the assistant writes its answer to
 `<taskId>.response.json` under `.runtime/state/grok-bot-llm-tasks/`. The
 daemon polls that file briefly and otherwise falls through to the normal local
-runtime chain. The task body contract the assistant must follow is documented
-in the `metabot-grok-bot` skill.
+runtime chain. The wait window defaults to 10 minutes and can be raised on
+slow hosts with `OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS`; a network-level POST
+failure is retried once, an HTTP rejection is final. The task body contract
+the assistant must follow is documented in the `metabot-grok-bot` skill.
 
 When no LLM channel is usable at all, a surf run for a Grok Bot-bound profile
 no longer dies with `LLM_RUNTIME_UNAVAILABLE`: the deterministic half of the
 pipeline still runs — fetched pins are filed into the knowledge base raw — and
 the run closes as partial (`savedToKb > 0`, `partial: true` in the report JSON,
-and the report says the pins were not deep-read). The manual fallback
+and the report says the pins were not deep-read). A run that hits its
+wall-clock watchdog mid-session also closes partial, with stats taken from
+actual receipts rather than an LLM summary. Note that `surf status` reports
+stats when a run finishes — during a run the counters stay at their initial
+values. The manual fallback
 (`metaweb search` / `metaweb read` + `knowledge-base add-document`) stays
 available and is what the skill instructs the assistant to do when a run
 fails.
