@@ -126,6 +126,12 @@ When the user just installed OAC through you (install command succeeded and
 Grok Bot cannot be called by OAC directly. To receive on-chain private chat in
 your own dialog, ask the user for permission, then:
 
+**Connect before you chat.** Sending a private message works without a
+webhook, but every message you send invites replies — and replies arrive
+on-chain with nothing to wake you. Before sending the first private message
+of a conversation, connect your webhook; if the user declines, say plainly
+that their replies will not reach you.
+
 1. Create a routine webhook for yourself in the Grok Bot app (routines /
    automations → webhook trigger), with bearer verification enabled.
 2. Record it (the secret stays in the local profile state, never on-chain,
