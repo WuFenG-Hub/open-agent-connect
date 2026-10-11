@@ -76,6 +76,7 @@ import type {
   UpdateMetabotInfoInput,
 } from '../core/bot/metabotProfileManager';
 import { normalizeOptionalDshLlmId, normalizeOptionalDshLlmReasoningEffort, readDshLlmBinding } from '../core/bot/dshLlm';
+import { isGrokBotBound, readGrokBotBinding } from '../core/host/grokBotBinding';
 import { mergeBotRoleInfo, normalizeBotType, normalizeOptionalGlobalMetaId, readBotRoleInfo, writeBotRoleInfo } from '../core/bot/botRole';
 import { applyTwinInvariant, resolveCurrentTwinSlug, resolveTwinHomeDir } from '../core/bot/twinRole';
 import { createSurfDaemonHandlers } from './surfHandlers';
@@ -17738,6 +17739,21 @@ export function createDefaultMetabotDaemonHandlers(input: {
           ],
         });
 
+        // A Grok Bot-bound profile without a routine webhook can send, but
+        // replies cannot reach its dialog — say so at the moment of sending.
+        const grokBotBinding = await readGrokBotBinding(
+          resolveMetabotPaths(actor.homeDir).grokBotBindingPath,
+        ).catch(() => null);
+        const webhookWarning = grokBotBinding && isGrokBotBound(grokBotBinding) && !grokBotBinding.webhook
+          ? await (async () => {
+            const profiles = await listMetabotProfiles(normalizedSystemHomeDir).catch(() => [] as MetabotProfileFull[]);
+            const slug = profiles.find((profile) => path.resolve(profile.homeDir) === path.resolve(actor.homeDir))?.slug
+              ?? path.basename(actor.homeDir);
+            return 'This assistant has no routine webhook: replies to this message cannot reach its Grok Bot dialog. '
+              + `Connect one with: metabot host binding webhook --from ${slug} --url <https-url> [--secret <token>].`;
+          })()
+          : null;
+
         return commandSuccess({
           to: request.to,
           path: sent.path,
@@ -17763,6 +17779,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
           transcriptMarkdownPath: artifacts.transcriptMarkdownPath,
           traceMarkdownPath: artifacts.traceMarkdownPath,
           traceJsonPath: artifacts.traceJsonPath,
+          ...(webhookWarning ? { webhookWarning } : {}),
         });
       },
 

@@ -103,3 +103,4 @@
 - **现象**：Grok Bot 助手（Peddy）与 AI_Sunny 私聊时，Peddy 侧每条都回 `You are a helpful AI assistant...` 模板文本。
 - **根因**：Peddy 所在云端机器无任何本地 LLM，且当时未接 Webhook，OAC 自动回复回落到内置模板 runner（默认 persona）。未真正调用任何 LLM。
 - **修复**：已绑定 Grok Bot 的 profile 在未接 Webhook 时不再发送模板回复——保持沉默、消息留在链上（doctor 标记未接通）。模板回落的开关改为可按 profile 状态动态判定（`allowTemplateFallback` 支持函数形式）。`hostLlmChatReplyRunner` 有回归测试。
+- **追加修复（发送时刻提示）**：已绑定但未接 Webhook 的 profile 调用 `chat private` 发送成功时，返回里带 `webhookWarning` 字段，明说回复到不了对话框并给出接线命令；接通后警告消失。（runtime.test.mjs 有回归测试。）

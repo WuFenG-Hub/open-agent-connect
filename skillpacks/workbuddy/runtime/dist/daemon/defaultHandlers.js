@@ -28,6 +28,7 @@ const llmTypes_1 = require("../core/llm/llmTypes");
 const metabotProfileManager_1 = require("../core/bot/metabotProfileManager");
 const metabotHomepage_1 = require("../core/bot/metabotHomepage");
 const dshLlm_1 = require("../core/bot/dshLlm");
+const grokBotBinding_1 = require("../core/host/grokBotBinding");
 const botRole_1 = require("../core/bot/botRole");
 const twinRole_1 = require("../core/bot/twinRole");
 const surfHandlers_1 = require("./surfHandlers");
@@ -15159,6 +15160,18 @@ function createDefaultMetabotDaemonHandlers(input) {
                         ...state.traces.filter((entry) => entry.traceId !== trace.traceId),
                     ],
                 });
+                // A Grok Bot-bound profile without a routine webhook can send, but
+                // replies cannot reach its dialog — say so at the moment of sending.
+                const grokBotBinding = await (0, grokBotBinding_1.readGrokBotBinding)((0, paths_1.resolveMetabotPaths)(actor.homeDir).grokBotBindingPath).catch(() => null);
+                const webhookWarning = grokBotBinding && (0, grokBotBinding_1.isGrokBotBound)(grokBotBinding) && !grokBotBinding.webhook
+                    ? await (async () => {
+                        const profiles = await (0, metabotProfileManager_1.listMetabotProfiles)(normalizedSystemHomeDir).catch(() => []);
+                        const slug = profiles.find((profile) => node_path_1.default.resolve(profile.homeDir) === node_path_1.default.resolve(actor.homeDir))?.slug
+                            ?? node_path_1.default.basename(actor.homeDir);
+                        return 'This assistant has no routine webhook: replies to this message cannot reach its Grok Bot dialog. '
+                            + `Connect one with: metabot host binding webhook --from ${slug} --url <https-url> [--secret <token>].`;
+                    })()
+                    : null;
                 return (0, commandResult_1.commandSuccess)({
                     to: request.to,
                     path: sent.path,
@@ -15180,6 +15193,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                     transcriptMarkdownPath: artifacts.transcriptMarkdownPath,
                     traceMarkdownPath: artifacts.traceMarkdownPath,
                     traceJsonPath: artifacts.traceJsonPath,
+                    ...(webhookWarning ? { webhookWarning } : {}),
                 });
             },
             privateChatConversations: async (rawInput = {}) => {
