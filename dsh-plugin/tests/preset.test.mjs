@@ -576,3 +576,34 @@ test('generatePreset (registry backend): composes from the installed dsh-web-app
     await rm(tmp, { recursive: true, force: true })
   }
 })
+
+test('generatePreset (registry backend): the own-location anchor does not depend on the process cwd', async () => {
+  // `import.meta.url` is a file:// URL, which is not a valid require.resolve
+  // `paths` entry: Node then treats it as a relative path and resolves it
+  // against process.cwd(), so the fallback only ever worked when the runner
+  // happened to run from the plugin directory. Resolve from an unrelated cwd
+  // to pin the path-based behaviour.
+  const tmp = await mkdtemp(join(tmpdir(), 'oac-dsh-preset-cwd-'))
+  const previousCwd = process.cwd()
+  const mock = createMockRegistryPresets()
+  const ctx = {
+    agentPresets: mock.agentPresets,
+    dshHomePath: (...segments) => join(tmp, ...segments),
+    webRuntime: { trustedHosts: [] },
+    webServer: { register: () => () => {} },
+    effect: (fn) => { fn() },
+  }
+  try {
+    process.chdir(tmp)
+    await plugin.generatePreset(ctx, makeBot({ slug: 'cwdok', name: 'Cwd' }))
+    assert.equal(mock.calls.register.length, 1)
+    assert.ok(
+      mock.calls.register[0].plugins.some((entry) => entry.id === 'tool-bash'),
+      'the devDependency copy resolved from the plugin install, not from the cwd',
+    )
+    await plugin.removePreset(ctx, 'cwdok')
+  } finally {
+    process.chdir(previousCwd)
+    await rm(tmp, { recursive: true, force: true })
+  }
+})

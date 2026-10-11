@@ -22,6 +22,8 @@
  */
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as yaml from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { isOacPresetId, presetIdForSlug } from './chip-logic.js'
@@ -96,11 +98,13 @@ function profileDirOf(ctx: HostContext): string | undefined {
  * Locate the host installation's shipped `standard` preset declaration. The
  * profile anchor serves production installs (and dev `link:` mounts, where the
  * plugin realpath escapes the profile); the plugin's own location resolves the
- * devDependency copy in this repository's checkout.
+ * devDependency copy in this repository's checkout and is converted from the
+ * module URL to a path so it stays independent of the process working
+ * directory.
  */
 function resolveStandardPatchPath(ctx: HostContext): string | undefined {
   const require = createRequire(import.meta.url)
-  const anchors = [profileDirOf(ctx), import.meta.url]
+  const anchors = [profileDirOf(ctx), dirname(fileURLToPath(import.meta.url))]
   for (const anchor of anchors) {
     if (anchor === undefined) continue
     try {
