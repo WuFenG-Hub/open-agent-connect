@@ -4088,6 +4088,40 @@ test('chat private writes encrypted simplemsg on chain and stores a chat trace i
   assert.match(transcriptMarkdown, /hello from loopback/);
 });
 
+test('chat private warns when a Grok Bot-bound sender has no webhook, and stays quiet once wired', async (t) => {
+  const homeDir = await createProfileHomeTemp('');
+  t.after(async () => stopDaemon(homeDir));
+
+  const created = await runCommand(homeDir, ['identity', 'create', '--name', 'Peddy']);
+  assert.equal(created.exitCode, 0);
+  const bound = await runCommand(homeDir, [
+    'host', 'binding', 'bind', '--from', 'peddy', '--assistant-id', 'asst-peddy', '--assistant-name', 'Peddy',
+  ]);
+  assert.equal(bound.exitCode, 0);
+
+  const requestFile = path.join(homeDir, 'chat-request.json');
+  await writeFile(requestFile, JSON.stringify({
+    to: created.payload.data.globalMetaId,
+    content: 'hello with no webhook',
+  }), 'utf8');
+
+  // The created identity is the Twin here, so no --from is needed.
+  const sent = await runCommand(homeDir, ['chat', 'private', '--request-file', requestFile]);
+  assert.equal(sent.exitCode, 0);
+  assert.match(sent.payload.data.webhookWarning, /no routine webhook/);
+  const listed = await runCommand(homeDir, ['identity', 'list']);
+  const slug = listed.payload.data.profiles.find((profile) => profile.name === 'Peddy').slug;
+  assert.ok(sent.payload.data.webhookWarning.includes(`host binding webhook --from ${slug}`));
+
+  const hooked = await runCommand(homeDir, [
+    'host', 'binding', 'webhook', '--from', 'peddy', '--url', 'https://grok.example.com/routine/x',
+  ]);
+  assert.equal(hooked.exitCode, 0);
+  const sentWired = await runCommand(homeDir, ['chat', 'private', '--request-file', requestFile]);
+  assert.equal(sentWired.exitCode, 0);
+  assert.equal(Object.hasOwn(sentWired.payload.data, 'webhookWarning'), false);
+});
+
 test('chat private --from uses the selected actor identity, default write network, and local stores', async (t) => {
   const systemHome = await mkdtempTempRoot('metabot-cli-runtime-chat-from-');
   const aliceHome = await createProfileHome(systemHome, 'actor-alice');
