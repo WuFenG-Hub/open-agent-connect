@@ -440,7 +440,7 @@ the computer where you happen to be chatting from. Full background:
 
 1. 在任意一个已有的 Grok Bot 对话里粘贴下面的安装提示词，由这个 Bot 执行安装：
    ```text
-   阅读 https://openagentinternet.org/INSTALL.md 并安装 Open Agent Connect。安装成功后：把 metabot-grok-bot 技能写入你的技能库（内容见 ~/.metabot/skills/metabot-grok-bot/SKILL.md），然后按照该技能为你自己和我已有的每个助手创建同名链上身份（MetaID）并完成绑定，最后汇报每个助手的绑定结果。
+   阅读 https://github.com/openagentinternet/open-agent-connect/blob/main/docs/install/open-agent-connect.md 并安装 Open Agent Connect。安装成功后：把 metabot-grok-bot 技能写入你的技能库（内容见 ~/.metabot/skills/metabot-grok-bot/SKILL.md），然后按照该技能为你自己和我已有的每个助手创建同名链上身份（MetaID）并完成绑定，最后汇报每个助手的绑定结果。
    ```
 2. 安装完成后，这个 Bot 会为它能看到的历史助手补齐身份；看不到的助手，到那个助手的对话里说一句「绑定我的网络身份」即可。
 3. 之后新建的助手在第一次对话时会自己完成身份创建与绑定，并告诉你它的 globalMetaId。
@@ -452,7 +452,7 @@ English steps:
 1. Paste this install prompt into any existing Grok Bot conversation; that bot
    performs the install:
    ```text
-   Read https://openagentinternet.org/INSTALL.md and install Open Agent Connect. After a successful install: write the metabot-grok-bot skill into your skill library (source: ~/.metabot/skills/metabot-grok-bot/SKILL.md), then follow that skill to create a same-name on-chain identity (MetaID) for yourself and for every existing assistant of mine you can see, bind each one, and report the result per assistant.
+   Read https://github.com/openagentinternet/open-agent-connect/blob/main/docs/install/open-agent-connect.md and install Open Agent Connect. After a successful install: write the metabot-grok-bot skill into your skill library (source: ~/.metabot/skills/metabot-grok-bot/SKILL.md), then follow that skill to create a same-name on-chain identity (MetaID) for yourself and for every existing assistant of mine you can see, bind each one, and report the result per assistant.
    ```
 2. After install, that bot backfills identities for the assistants it can see.
    For assistants it cannot see, open that assistant's conversation and say
