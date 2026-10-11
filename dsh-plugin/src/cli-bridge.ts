@@ -400,9 +400,12 @@ async function defaultSpawnNpm(
 
 /**
  * Run the guided runtime install (`npm i -g open-agent-connect@latest`) and
- * re-check. Only ever called from the setup card's explicit button click —
- * a global npm install is a sensitive change to the user's machine and is
- * never done silently.
+ * re-check. Called from the apply-time automatic install/upgrade
+ * (autoInstallRuntime) and from the setup card's explicit retry button —
+ * both through the ensureRuntimeInstalled single-flight. The npm global
+ * install still shows up on the Bots-page card as progress while it runs;
+ * only the no-npm / permission-denied environments degrade to a copyable
+ * manual command.
  */
 export async function installRuntime(deps: InstallRuntimeDeps = {}): Promise<RuntimeInstallResult> {
   const env = deps.env ?? process.env
@@ -451,6 +454,77 @@ export async function installRuntime(deps: InstallRuntimeDeps = {}): Promise<Run
     }
   }
   return { ok: true, permission: false, message: 'runtime installed', command: RUNTIME_INSTALL_COMMAND, check: post }
+}
+
+// ── Automatic runtime install/upgrade ──────────────────────────────────────
+
+/** Progress of the apply-time automatic runtime install, surfaced on the setup card. */
+export type RuntimeAutoInstallState =
+  | { phase: 'idle' }
+  | { phase: 'running' }
+  | { phase: 'done' }
+  | { phase: 'failed'; message: string; permission: boolean; command: string }
+
+let autoInstallState: RuntimeAutoInstallState = { phase: 'idle' }
+let sharedInstall: Promise<RuntimeInstallResult> | null = null
+let autoInstallAttempted = false
+
+export function runtimeAutoInstallState(): RuntimeAutoInstallState {
+  return autoInstallState
+}
+
+/**
+ * Single-flight wrapper around installRuntime: the apply-time automatic
+ * install and the setup card's retry button share one npm install run, and
+ * the state machine feeds the card's progress line either way.
+ */
+export function ensureRuntimeInstalled(deps: InstallRuntimeDeps = {}): Promise<RuntimeInstallResult> {
+  if (sharedInstall) return sharedInstall
+  autoInstallState = { phase: 'running' }
+  const promise = installRuntime(deps)
+  sharedInstall = promise
+  void promise.then((result) => {
+    autoInstallState = result.ok
+      ? { phase: 'done' }
+      : { phase: 'failed', message: result.message, permission: result.permission, command: result.command }
+  }, (error: unknown) => {
+    autoInstallState = {
+      phase: 'failed',
+      message: error instanceof Error ? error.message : String(error),
+      permission: false,
+      command: RUNTIME_INSTALL_COMMAND,
+    }
+  }).finally(() => {
+    if (sharedInstall === promise) sharedInstall = null
+  })
+  return promise
+}
+
+/**
+ * Apply-time automatic runtime install/upgrade: when the probe reports the
+ * runtime missing or stale (both statuses imply npm is available), start the
+ * guided install in the background instead of waiting for the setup card's
+ * button. At most one automatic attempt per process — a failure surfaces on
+ * the card, whose explicit retry goes through ensureRuntimeInstalled.
+ */
+export function autoInstallRuntime(deps: {
+  check?: () => RuntimeCheck
+  install?: () => Promise<RuntimeInstallResult>
+} = {}): RuntimeCheck {
+  const check = (deps.check ?? (() => checkRuntime()))()
+  if (check.status !== 'missing' && check.status !== 'stale') return check
+  if (!autoInstallAttempted) {
+    autoInstallAttempted = true
+    const install = deps.install ?? (() => ensureRuntimeInstalled())
+    void Promise.resolve(install()).catch(() => undefined)
+  }
+  return check
+}
+
+/** Test hook: drop the auto-install state machine between tests. */
+export function resetRuntimeAutoInstallForTests(): void {
+  autoInstallState = { phase: 'idle' }
+  autoInstallAttempted = false
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

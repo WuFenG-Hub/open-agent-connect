@@ -235,8 +235,88 @@ test('the plugin surface exports the runtime setup entry points', async () => {
   const plugin = await import('../lib/index.js')
   assert.equal(typeof plugin.checkRuntime, 'function')
   assert.equal(typeof plugin.installRuntime, 'function')
+  assert.equal(typeof plugin.ensureRuntimeInstalled, 'function')
+  assert.equal(typeof plugin.autoInstallRuntime, 'function')
+  assert.equal(typeof plugin.runtimeAutoInstallState, 'function')
   assert.equal(typeof plugin.compareVersions, 'function')
   assert.equal(plugin.RUNTIME_INSTALL_COMMAND, 'npm i -g open-agent-connect@latest')
+})
+
+// ── Apply-time automatic install/upgrade state machine ─────────────────────
+
+const {
+  autoInstallRuntime,
+  ensureRuntimeInstalled,
+  runtimeAutoInstallState,
+  resetRuntimeAutoInstallForTests,
+} = await import('../lib/cli-bridge.js')
+
+function staleCheck() {
+  return checkRuntime({
+    env: ENV,
+    node: NODE,
+    npmPath: NPM,
+    cliPath: '/x/dist/cli/main.js',
+    readVersion: () => '0.0.1',
+  })
+}
+
+test('ensureRuntimeInstalled: success flips the state to done; concurrent callers share one npm run', async () => {
+  resetRuntimeAutoInstallForTests()
+  const checks = [missingCheck(), okCheck()]
+  let calls = 0
+  let spawned = 0
+  const deps = {
+    check: () => checks[calls++],
+    spawnNpm: async () => { spawned += 1; return { code: 0, stdout: '', stderr: '' } },
+  }
+  const [first, second] = await Promise.all([
+    ensureRuntimeInstalled(deps),
+    ensureRuntimeInstalled(deps),
+  ])
+  assert.equal(first.ok, true)
+  assert.equal(second.ok, true)
+  assert.equal(spawned, 1)
+  assert.deepEqual(runtimeAutoInstallState(), { phase: 'done' })
+})
+
+test('ensureRuntimeInstalled: failure records message/permission/command for the card', async () => {
+  resetRuntimeAutoInstallForTests()
+  const result = await ensureRuntimeInstalled({
+    check: missingCheck,
+    spawnNpm: async () => ({ code: 1, stdout: '', stderr: 'npm ERR! Error: EACCES: permission denied' }),
+  })
+  assert.equal(result.ok, false)
+  const state = runtimeAutoInstallState()
+  assert.equal(state.phase, 'failed')
+  assert.equal(state.permission, true)
+  assert.match(state.message, /EACCES/)
+  assert.equal(state.command, RUNTIME_INSTALL_COMMAND)
+  // A later explicit retry is allowed to run again.
+  resetRuntimeAutoInstallForTests()
+})
+
+test('autoInstallRuntime: missing/stale probe starts one background install per process', async () => {
+  resetRuntimeAutoInstallForTests()
+  let installs = 0
+  const install = async () => { installs += 1; return { ok: true, permission: false, message: '', command: RUNTIME_INSTALL_COMMAND, check: okCheck() } }
+  const check = autoInstallRuntime({ check: missingCheck, install })
+  assert.equal(check.status, 'missing')
+  autoInstallRuntime({ check: staleCheck, install })
+  await Promise.resolve()
+  assert.equal(installs, 1)
+})
+
+test('autoInstallRuntime: ok and npm_unavailable probes never trigger an install', async () => {
+  resetRuntimeAutoInstallForTests()
+  let installs = 0
+  const install = async () => { installs += 1; throw new Error('must not run') }
+  assert.equal(autoInstallRuntime({ check: okCheck, install }).status, 'ok')
+  const unavailable = checkRuntime({ env: ENV, node: NODE, npmPath: undefined, cliPath: undefined, readVersion: () => null })
+  autoInstallRuntime({ check: () => unavailable, install })
+  await Promise.resolve()
+  assert.equal(installs, 0)
+  assert.equal(runtimeAutoInstallState().phase, 'idle')
 })
 
 // ── Electron run-as-node + node-independent local discovery ─────────────────

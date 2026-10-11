@@ -44,7 +44,15 @@ import {
 } from './conversation-bridge.js'
 import { streamAllChatEvents } from './chat-watcher.js'
 import { streamDaemonMetaAppEvents } from './metaapp-bridge.js'
-import { CliBridgeError, checkRuntime, installRuntime, runMetabot, type MetabotCommandResult } from './cli-bridge.js'
+import {
+  CliBridgeError,
+  autoInstallRuntime,
+  checkRuntime,
+  ensureRuntimeInstalled,
+  runMetabot,
+  runtimeAutoInstallState,
+  type MetabotCommandResult,
+} from './cli-bridge.js'
 import { runMetabotPinned } from './daemon-pinned-run.js'
 import {
   localBotList,
@@ -106,6 +114,55 @@ async function handleWho(): Promise<MetabotCommandResult> {
   return runMetabot(['identity', 'who'], { timeoutMs: PING_TIMEOUT_MS })
 }
 
+/**
+ * Post-install wiring shared by the setup card's retry route and the
+ * apply-time automatic install/upgrade: fresh bootstrap (daemon start +
+ * skill bind), health replacement, local-read cache reset, zero-touch owner
+ * ensure, and the preset reconcile the missing CLI skipped at apply time.
+ */
+async function completeRuntimeInstall(
+  ctx: HostContext,
+  botHub: BotChangeEventHub,
+  onRuntimeInstalled?: (health: HealthPayload) => void,
+): Promise<HealthPayload> {
+  const health = await bootstrapHealth()
+  onRuntimeInstalled?.(health)
+  // The guided install may have landed the FIRST OAC dist on this machine:
+  // drop the local-read caches so in-process reads re-resolve immediately.
+  resetLocalReadCache()
+  // Zero-touch account, IDBots-style: a brand-new runtime on a machine with
+  // no owner identity gets one right here (`user ensure` is idempotent, so
+  // an existing identity — e.g. created seconds ago by the daemon's own
+  // onboarding kick — is returned untouched). The daemon's fire-and-forget
+  // onboarding owns the traffic account + free-grant claim afterwards.
+  if (health.cliPath !== null) {
+    try {
+      const existing = await localUserWho()
+      const hasIdentity = existing?.ok
+        ? Boolean((existing.data as { identity?: unknown } | undefined)?.identity)
+        : false
+      if (!hasIdentity) {
+        await runMetabot(['user', 'ensure'], { timeoutMs: 45_000 })
+      }
+    } catch (error) {
+      warn(ctx, `post-install owner ensure failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  // The apply-time preset reconcile was skipped when the CLI was missing;
+  // retry it once here so Bot presets (the new-session chip) appear
+  // without a DSH restart. Best-effort — the registry watch and the rest
+  // of a full re-apply still want a restart.
+  if (ctx.agentPresets !== undefined && health.cliPath !== null) {
+    try {
+      await reconcilePresets(ctx)
+      botHub.notify()
+    } catch (error) {
+      warn(ctx, `post-install preset reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  return health
+}
+
 async function dispatchPost(
   ctx: HostContext,
   method: string,
@@ -116,14 +173,16 @@ async function dispatchPost(
 ): Promise<MetabotCommandResult> {
   if (method === 'runtime/check') {
     // The setup card's probe: always a success envelope — the check's own
-    // `status` field carries missing / stale / npm_unavailable.
-    return { ok: true, state: 'success', data: checkRuntime() }
+    // `status` field carries missing / stale / npm_unavailable, and
+    // `autoInstall` carries the apply-time automatic install's progress.
+    return { ok: true, state: 'success', data: { ...checkRuntime(), autoInstall: runtimeAutoInstallState() } }
   }
   if (method === 'runtime/install') {
-    // One-click guided install from the setup card's explicit button. npm
-    // then daemon start + skill bind; failures (e.g. EPERM) return the
-    // manual command for the card to show.
-    const result = await installRuntime()
+    // The setup card's explicit retry; shares the single install flight with
+    // the apply-time automatic install/upgrade. npm then daemon start +
+    // skill bind; failures (e.g. EPERM) return the manual command for the
+    // card to show.
+    const result = await ensureRuntimeInstalled()
     if (!result.ok) {
       return {
         ok: false,
@@ -133,41 +192,7 @@ async function dispatchPost(
         data: { permission: result.permission, command: result.command, check: result.check },
       }
     }
-    const health = await bootstrapHealth()
-    onRuntimeInstalled?.(health)
-    // The guided install may have landed the FIRST OAC dist on this machine:
-    // drop the local-read caches so in-process reads re-resolve immediately.
-    resetLocalReadCache()
-    // Zero-touch account, IDBots-style: a brand-new runtime on a machine with
-    // no owner identity gets one right here (`user ensure` is idempotent, so
-    // an existing identity — e.g. created seconds ago by the daemon's own
-    // onboarding kick — is returned untouched). The daemon's fire-and-forget
-    // onboarding owns the traffic account + free-grant claim afterwards.
-    if (health.cliPath !== null) {
-      try {
-        const existing = await localUserWho()
-        const hasIdentity = existing?.ok
-          ? Boolean((existing.data as { identity?: unknown } | undefined)?.identity)
-          : false
-        if (!hasIdentity) {
-          await runMetabot(['user', 'ensure'], { timeoutMs: 45_000 })
-        }
-      } catch (error) {
-        warn(ctx, `post-install owner ensure failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    // The apply-time preset reconcile was skipped when the CLI was missing;
-    // retry it once here so Bot presets (the new-session chip) appear
-    // without a DSH restart. Best-effort — the registry watch and the rest
-    // of a full re-apply still want a restart.
-    if (ctx.agentPresets !== undefined && health.cliPath !== null) {
-      try {
-        await reconcilePresets(ctx)
-        botHub.notify()
-      } catch (error) {
-        warn(ctx, `post-install preset reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
+    const health = await completeRuntimeInstall(ctx, botHub, onRuntimeInstalled)
     return { ok: true, state: 'success', data: { check: result.check, health } }
   }
   if (method === 'browser/open') {
@@ -661,6 +686,7 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   // message-source shape before anything can inject a user message.
   configureMessageSources(registryBackendOf(ctx.agentPresets) !== undefined)
   let health: HealthPayload = emptyHealth()
+  const replaceHealth = (installed: HealthPayload): void => { health = installed }
   const browserHub = new BrowserEventHub()
   // Bot-set push feed: route mutations notify directly; the host-lifetime
   // registry watch below covers CLI/daemon writes and reconciles presets.
@@ -689,6 +715,24 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   if (config.skipBootstrap) {
     health.error = 'bootstrap skipped'
   } else {
+    // Runtime self-setup: a missing or stale runtime no longer waits for the
+    // Bots-page card click — the guided npm install starts in the background
+    // here, at most once per process. The card polls runtime/check for
+    // progress; only failures and no-npm machines still need the card.
+    autoInstallRuntime()
+    if (runtimeAutoInstallState().phase === 'running') {
+      void ensureRuntimeInstalled().then(async (result) => {
+        if (!result.ok) {
+          warn(ctx, `automatic runtime install failed: ${result.message}`)
+          return
+        }
+        try {
+          await completeRuntimeInstall(ctx, botHub, replaceHealth)
+        } catch (error) {
+          warn(ctx, `automatic post-install bootstrap failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }, () => undefined)
+    }
     try {
       health = await bootstrapHealth()
       if (!health.ok) warn(ctx, health.error ?? 'OAC host bootstrap incomplete')
@@ -724,15 +768,15 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   if (!config.skipBootstrap && ctx.get?.('schedule')) {
     void migrateLegacyScheduleTasks(ctx)
   }
-  // After a guided runtime install (Bots-page setup card), the fresh
-  // bootstrap result replaces the apply-time health so /oac/api/health and
-  // the panels tell the new truth without a DSH restart.
+  // After a runtime install (apply-time automatic or the Bots-page card's
+  // retry), the fresh bootstrap result replaces the apply-time health so
+  // /oac/api/health and the panels tell the new truth without a DSH restart.
   ctx.effect(() => registerApi(
     ctx,
     () => health,
     browserHub,
     botHub,
-    (installed) => { health = installed },
+    replaceHealth,
   ), 'oac-dsh: /oac/api routes')
 
   // Memory system: per-turn injection, post-turn extraction, and per-agent
@@ -905,19 +949,24 @@ export {
 } from './bot-events.js'
 export { localIdentityManagerPaths } from './local-read.js'
 export {
+  autoInstallRuntime,
   checkRuntime,
   compareVersions,
+  ensureRuntimeInstalled,
   installRuntime,
   npmGlobalPackageCli,
   parseMetabotStdout,
   pluginVersion,
   resolveCli,
   resolveMetabotCliPath,
+  resetRuntimeAutoInstallForTests,
   resetRuntimeVersionCache,
   runMetabot,
+  runtimeAutoInstallState,
   RUNTIME_INSTALL_COMMAND,
   type CheckRuntimeDeps,
   type InstallRuntimeDeps,
+  type RuntimeAutoInstallState,
   type RuntimeCheck,
   type RuntimeCheckStatus,
   type RuntimeInstallResult,

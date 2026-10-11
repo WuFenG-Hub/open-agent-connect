@@ -1132,6 +1132,14 @@ const RUNTIME_INSTALL_COMMAND_FALLBACK = 'npm i -g open-agent-connect@latest'
 
 export type RuntimeCheckStatus = 'ok' | 'missing' | 'stale' | 'npm_unavailable'
 
+/** Apply-time automatic runtime install progress, reported by runtime/check. */
+export type RuntimeAutoInstallPayload = {
+  phase: 'running' | 'done' | 'failed'
+  message: string | null
+  permission: boolean
+  command: string | null
+}
+
 export type RuntimeCheckPayload = {
   status: RuntimeCheckStatus
   cliPath: string | null
@@ -1142,6 +1150,8 @@ export type RuntimeCheckPayload = {
   requiredVersion: string
   installCommand: string
   error: string | null
+  /** Absent when no automatic install has run this session (phase idle). */
+  autoInstall: RuntimeAutoInstallPayload | null
 }
 
 export type RuntimeInstallResult =
@@ -1158,6 +1168,8 @@ export type RuntimeInstallResult =
 function normalizeRuntimeCheck(value: unknown): RuntimeCheckPayload {
   const record = recordOf(value)
   const status = textOf(record.status)
+  const auto = recordOf(record.autoInstall)
+  const autoPhase = textOf(auto.phase)
   return {
     status: status === 'missing' || status === 'stale' || status === 'npm_unavailable'
       ? status
@@ -1170,6 +1182,14 @@ function normalizeRuntimeCheck(value: unknown): RuntimeCheckPayload {
     requiredVersion: textOf(record.requiredVersion) || '0.0.0',
     installCommand: textOf(record.installCommand) || RUNTIME_INSTALL_COMMAND_FALLBACK,
     error: textOf(record.error) || null,
+    autoInstall: autoPhase === 'running' || autoPhase === 'done' || autoPhase === 'failed'
+      ? {
+        phase: autoPhase,
+        message: textOf(auto.message) || null,
+        permission: auto.permission === true,
+        command: textOf(auto.command) || null,
+      }
+      : null,
   }
 }
 

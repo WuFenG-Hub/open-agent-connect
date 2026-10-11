@@ -82,7 +82,7 @@ export interface BotPanelInjected extends MemoryPanelInjected {
   metaappList: (from: string, size?: number, cursor?: string) => Promise<MetaAppListPayload>
   /** First-run runtime probe behind the setup card (host `runtime/check`). */
   runtimeCheck: () => Promise<RuntimeCheckPayload>
-  /** Guided runtime install (host `runtime/install`) — the setup card's button. */
+  /** Guided runtime install (host `runtime/install`) — the setup card's retry after the automatic install fails. */
   runtimeInstall: () => Promise<RuntimeInstallResult>
 }
 
@@ -501,6 +501,8 @@ export function BotPanel({
           runtime={runtime}
           t={t}
           install={runtimeInstall}
+          check={runtimeCheck}
+          onProgress={setRuntime}
           onInstalled={() => {
             setRuntime(null)
             setRuntimeInstalled(true)
