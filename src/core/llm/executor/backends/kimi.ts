@@ -1,5 +1,6 @@
 import type { LlmBackend, LlmBackendFactory } from './backend';
 import { createAcpBackend } from './acp';
+import { acpToolNameFromTitle, type AcpDialect } from './acp-dialect';
 
 function normalizeKimiToolName(toolName: string): string {
   let value = toolName.trim();
@@ -41,6 +42,12 @@ function normalizeKimiToolName(toolName: string): string {
   }
 }
 
+// Kimi reports mixed-case human tool names on top of the shared title
+// vocabulary; lowercase them onto the canonical snake_case set.
+const KIMI_ACP_DIALECT: AcpDialect = {
+  toolNameFromCall: ({ title, kind, name }) => normalizeKimiToolName(acpToolNameFromTitle(title, kind) || name || 'tool'),
+};
+
 export function createKimiBackend(binaryPath: string, env?: Record<string, string>): LlmBackend {
   return createAcpBackend({
     provider: 'kimi',
@@ -51,7 +58,7 @@ export function createKimiBackend(binaryPath: string, env?: Record<string, strin
       acp: { takesValue: false },
     },
     resumeMethod: 'session/resume',
-    normalizeToolName: normalizeKimiToolName,
+    dialect: KIMI_ACP_DIALECT,
   });
 }
 

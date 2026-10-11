@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import type { LlmExecutionRequest, LlmExecutionResult, LlmEventEmitter, LlmTokenUsage } from '../types';
 import { buildProcessEnv, filterBlockedArgs, shutdownChildProcess, stringifyError, type BlockedArgSpec, type LlmBackend } from './backend';
+import type { AcpDialect } from './acp-dialect';
 import { extractUsage, getString, isRecord, stringifyContent, usageRecordHasTokens } from './jsonProcess';
 
 const DEFAULT_ACP_TIMEOUT_MS = 1_200_000;
@@ -41,7 +42,8 @@ export interface AcpBackendOptions {
   includeMcpServersInResume?: boolean;
   sendPromptContentAlias?: boolean;
   gateNotificationsUntilPrompt?: boolean;
-  normalizeToolName?: (toolName: string) => string;
+  /** Per-provider deviations; see acp-dialect.ts. */
+  dialect?: AcpDialect;
 }
 
 function combineArgs(options: AcpBackendOptions, request: LlmExecutionRequest): string[] {
@@ -149,39 +151,8 @@ function parseToolArgs(argsText: string | undefined): Record<string, unknown> | 
   }
 }
 
-export function hermesToolNameFromTitle(title: string | undefined, kind: string | undefined): string {
-  const safeTitle = title?.trim() ?? '';
-  if (safeTitle === 'execute code') return 'execute_code';
-  const colonIndex = safeTitle.indexOf(':');
-  if (colonIndex > 0) {
-    const name = safeTitle.slice(0, colonIndex).trim();
-    if (name === 'terminal') return 'terminal';
-    if (name === 'read') return 'read_file';
-    if (name === 'write') return 'write_file';
-    if (name.startsWith('patch')) return 'patch';
-    if (name === 'search') return 'search_files';
-    if (name === 'web search') return 'web_search';
-    if (name === 'extract') return 'web_extract';
-    if (name === 'delegate') return 'delegate_task';
-    if (name === 'analyze image') return 'vision_analyze';
-    return name;
-  }
-  switch (kind) {
-    case 'read':
-      return 'read_file';
-    case 'edit':
-      return 'write_file';
-    case 'execute':
-      return 'terminal';
-    case 'search':
-      return 'search_files';
-    case 'fetch':
-      return 'web_search';
-    case 'think':
-      return 'thinking';
-    default:
-      return safeTitle || kind || 'tool';
-  }
+function resolveAcpToolName(dialect: AcpDialect | undefined, title: string, kind: string, name: string): string {
+  return dialect?.toolNameFromCall?.({ title, kind, name }) || name || title || kind || 'tool';
 }
 
 function defaultProviderError(stderr: string): string | undefined {
@@ -248,13 +219,24 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
       const handleAgentRequest = (message: JsonRpcMessage) => {
         if (message.id === undefined) return;
         if (message.method === 'session/request_permission') {
+          // Unattended bot turns approve tool use; prefer an offered
+          // allow-always option so the answer stays valid in the agent's own
+          // vocabulary, and fall back to the historical fixed option id for
+          // agents that offer no options to pick from.
+          const params = isRecord(message.params) ? message.params : {};
+          const offered = Array.isArray(params.options) ? params.options : [];
+          const allowOption = offered.find((option) => isRecord(option) && option.kind === 'allow_always')
+            ?? offered.find((option) => isRecord(option) && option.kind === 'allow_once');
+          const optionId = allowOption && isRecord(allowOption) && typeof allowOption.optionId === 'string'
+            ? allowOption.optionId
+            : 'approve_for_session';
           writeJson({
             jsonrpc: '2.0',
             id: message.id,
             result: {
               outcome: {
                 outcome: 'selected',
-                optionId: 'approve_for_session',
+                optionId,
               },
             },
           });
@@ -268,7 +250,7 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
       };
 
       const emitToolUse = (callId: string, tool: string, input: Record<string, unknown> | undefined) => {
-        emitter.emit({ type: 'tool_use', tool: options.normalizeToolName?.(tool) ?? tool, callId, input: input ?? {} });
+        emitter.emit({ type: 'tool_use', tool, callId, input: input ?? {} });
       };
 
       const emitDeferredToolUse = (
@@ -276,10 +258,11 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         callId: string,
         title: string,
         kind: string,
+        name: string,
         fallbackInput: Record<string, unknown> | undefined,
       ) => {
         if (pendingTool?.emitted) return;
-        const toolName = pendingTool?.toolName ?? hermesToolNameFromTitle(title, kind);
+        const toolName = pendingTool?.toolName ?? resolveAcpToolName(options.dialect, title, kind, name);
         const input = pendingTool?.input ?? parseToolArgs(pendingTool?.argsText) ?? fallbackInput;
         emitToolUse(callId, toolName, input);
       };
@@ -289,7 +272,8 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         const callId = String(data.toolCallId ?? data.tool_call_id ?? data.id ?? 'tool');
         const title = getString(data.title) ?? getString(data.name) ?? '';
         const kind = getString(data.kind) ?? '';
-        const toolName = hermesToolNameFromTitle(title, kind) || getString(data.name) || 'tool';
+        const name = getString(data.name) ?? '';
+        const toolName = resolveAcpToolName(options.dialect, title, kind, name);
         const rawInput = isRecord(data.rawInput)
           ? data.rawInput
           : isRecord(data.input)
@@ -324,6 +308,7 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         pendingTools.delete(callId);
         const title = getString(data.title) ?? getString(data.name) ?? '';
         const kind = getString(data.kind) ?? '';
+        const name = getString(data.name) ?? '';
         const rawInput = isRecord(data.rawInput)
           ? data.rawInput
           : isRecord(data.input)
@@ -331,8 +316,9 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
             : isRecord(data.parameters)
               ? data.parameters
               : undefined;
-        emitDeferredToolUse(pendingTool, callId, title, kind, rawInput);
-        const output = stringifyContent(data.rawOutput ?? data.output ?? data.result) || extractToolCallText(data.content);
+        emitDeferredToolUse(pendingTool, callId, title, kind, name, rawInput);
+        const rawOutput = options.dialect?.normalizeToolResult?.(data.rawOutput) ?? data.rawOutput;
+        const output = stringifyContent(rawOutput ?? data.output ?? data.result) || extractToolCallText(data.content);
         emitter.emit({ type: 'tool_result', callId, output });
       };
 
@@ -503,11 +489,12 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         }
 
         if (request.model) {
+          const switchRequest = options.dialect?.setModelRequest?.(sessionId, request.model) ?? {
+            method: 'session/set_model',
+            params: { sessionId, modelId: request.model } as Record<string, unknown>,
+          };
           try {
-            await awaitStep(requestRpc('session/set_model', {
-              sessionId,
-              modelId: request.model,
-            }), 'session/set_model');
+            await awaitStep(requestRpc(switchRequest.method, switchRequest.params), switchRequest.method);
           } catch (error) {
             finalStatus = 'failed';
             finalError = `${options.provider} could not switch to model "${request.model}": ${stringifyError(error)}`;

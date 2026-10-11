@@ -286,7 +286,7 @@ test('runtime discovery uses expanded provider metadata and environment auth che
     await writeFile(cursorPath, '#!/bin/sh\necho "cursor-agent 3.4.5"\n', 'utf8');
     await writeFile(geminiPath, '#!/bin/sh\necho "gemini 2.3.4"\n', 'utf8');
     await writeFile(kiroPath, '#!/bin/sh\necho "kiro-cli 5.6.7"\n', 'utf8');
-    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.16.0"\n', 'utf8');
+    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.18.31"\n', 'utf8');
     await writeFile(codeBuddyPath, '#!/bin/sh\necho "CodeBuddy 2.0.0"\n', 'utf8');
     await writeFile(zcodePath, '#!/bin/sh\necho "0.14.8"\n', 'utf8');
     await chmod(copilotPath, 0o755);
@@ -431,7 +431,7 @@ test('runtime discovery honors explicit provider path environment overrides outs
     const binDir = path.join(tempRoot, 'external-bin');
     await mkdir(binDir, { recursive: true });
     const opencodePath = path.join(binDir, 'opencode');
-    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.16.0"\n', 'utf8');
+    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.18.31"\n', 'utf8');
     await chmod(opencodePath, 0o755);
 
     const result = await discoverLlmRuntimes({
@@ -977,7 +977,7 @@ test('runtime discovery probes different providers concurrently', async () => {
     const codexPath = path.join(binDir, 'codex');
     const opencodePath = path.join(binDir, 'opencode');
     await writeFile(codexPath, '#!/bin/sh\necho "codex-cli 0.133.0"\n', 'utf8');
-    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.16.0"\n', 'utf8');
+    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.18.31"\n', 'utf8');
     await chmod(codexPath, 0o755);
     await chmod(opencodePath, 0o755);
 
@@ -1396,7 +1396,7 @@ test('runtime discovery skips the login shell when every provider resolves cheap
     const codexPath = path.join(binDir, 'codex');
     const opencodePath = path.join(binDir, 'opencode');
     await writeFile(codexPath, '#!/bin/sh\necho "codex 1.0.0"\n', 'utf8');
-    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.16.0"\n', 'utf8');
+    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.18.31"\n', 'utf8');
     await chmod(codexPath, 0o755);
     await chmod(opencodePath, 0o755);
     const shellPath = await writeFakeLoginShell(tempRoot);
@@ -1622,7 +1622,7 @@ test('runtime discovery surfaces onRuntimeDiscovered failures without aborting t
     const codexPath = path.join(binDir, 'codex');
     const opencodePath = path.join(binDir, 'opencode');
     await writeFile(codexPath, '#!/bin/sh\necho "codex 1.0.0"\n', 'utf8');
-    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.16.0"\n', 'utf8');
+    await writeFile(opencodePath, '#!/bin/sh\necho "opencode 1.18.31"\n', 'utf8');
     await chmod(codexPath, 0o755);
     await chmod(opencodePath, 0o755);
 

@@ -1,5 +1,6 @@
 import type { LlmBackend, LlmBackendFactory } from './backend';
 import { createAcpBackend } from './acp';
+import { acpToolNameFromTitle, type AcpDialect } from './acp-dialect';
 
 function normalizeKiroToolName(toolName: string): string {
   let value = toolName.trim();
@@ -45,6 +46,12 @@ function normalizeKiroToolName(toolName: string): string {
   }
 }
 
+// Kiro reports mixed-case human tool names on top of the shared title
+// vocabulary; lowercase them onto the canonical snake_case set.
+const KIRO_ACP_DIALECT: AcpDialect = {
+  toolNameFromCall: ({ title, kind, name }) => normalizeKiroToolName(acpToolNameFromTitle(title, kind) || name || 'tool'),
+};
+
 export function createKiroBackend(binaryPath: string, env?: Record<string, string>): LlmBackend {
   return createAcpBackend({
     provider: 'kiro',
@@ -61,7 +68,7 @@ export function createKiroBackend(binaryPath: string, env?: Record<string, strin
     includeMcpServersInResume: true,
     sendPromptContentAlias: true,
     gateNotificationsUntilPrompt: true,
-    normalizeToolName: normalizeKiroToolName,
+    dialect: KIRO_ACP_DIALECT,
   });
 }
 
