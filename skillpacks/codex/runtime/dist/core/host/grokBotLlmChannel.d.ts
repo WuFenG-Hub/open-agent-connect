@@ -1,5 +1,7 @@
 export declare const GROK_BOT_LLM_TASK_TIMEOUT_MS: number;
 export declare const GROK_BOT_LLM_TASK_POLL_INTERVAL_MS = 5000;
+/** Env override for the response-file wait window (slow cloud hosts). */
+export declare const GROK_BOT_LLM_TASK_TIMEOUT_ENV = "OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS";
 export interface GrokBotLlmTaskResponse {
     taskId: string;
     status: 'ok' | 'failed';
@@ -21,6 +23,7 @@ export declare function createGrokBotWebhookCompletion(options: {
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
     pollIntervalMs?: number;
+    retryDelayMs?: number;
     createTaskId?: () => string;
     now?: () => Date;
     logWarning?: (scope: string, message: string) => void;

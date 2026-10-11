@@ -11332,6 +11332,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                 runSurfSession: input.runSurfSession,
                 metawebBaseUrl: normalizeText(input.metawebApiBaseUrl) || undefined,
                 log: (message) => console.warn(message),
+                listProfileHomeDirs: async () => (await (0, metabotProfileManager_1.listMetabotProfiles)(normalizedSystemHomeDir).catch(() => [])).map((profile) => profile.homeDir),
             });
             return {
                 status: (rawInput) => group.status(rawInput),
@@ -11339,6 +11340,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                 enable: (rawInput) => group.enable(rawInput),
                 disable: (rawInput) => group.disable(rawInput),
                 budget: (rawInput) => group.budget(rawInput),
+                recoverAfterRestart: () => group.recoverAfterRestart(),
             };
         })(),
         // Dream/memory/kb groups: local-service surfaces for the standalone UI

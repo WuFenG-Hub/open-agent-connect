@@ -32,7 +32,7 @@ async function writeBinding(homeDir, patch) {
   });
 }
 
-function sampleMessage() {
+function sampleMessage(overrides = {}) {
   return {
     fromGlobalMetaId: 'metaid-sender',
     content: 'hello from the chain',
@@ -41,6 +41,7 @@ function sampleMessage() {
     fromChatPublicKey: null,
     timestamp: 1789000000,
     rawMessage: null,
+    ...overrides,
   };
 }
 
@@ -92,7 +93,7 @@ test('posts the full message with bearer auth and records an ok delivery', async
   assert.equal(binding.lastWebhookDelivery.error, null);
 });
 
-test('non-2xx records one failed delivery and does not retry', async () => {
+test('non-2xx records one failed delivery with a truncated body excerpt', async () => {
   const { homeDir } = await createProfileHome('grok-webhook-500-');
   await writeBinding(homeDir, {
     webhook: { url: 'https://grok.example.com/routine/abc', secret: null, configuredAt: '2026-10-10T01:02:03.000Z' },
@@ -102,14 +103,39 @@ test('non-2xx records one failed delivery and does not retry', async () => {
   const outcome = await deliverGrokBotPrivateChat({
     homeDir,
     message: sampleMessage(),
-    fetchImpl: async () => { calls += 1; return new Response('nope', { status: 502 }); },
+    fetchImpl: async () => { calls += 1; return new Response('nope: duplicate message', { status: 502 }); },
   });
 
   assert.equal(outcome, 'failed');
   assert.equal(calls, 1);
   const binding = await readGrokBotBinding(grokBotBindingPathForProfile(homeDir));
   assert.equal(binding.lastWebhookDelivery.status, 'failed');
-  assert.equal(binding.lastWebhookDelivery.error, 'HTTP 502');
+  assert.equal(binding.lastWebhookDelivery.error, 'HTTP 502: nope: duplicate message');
+});
+
+test('failed attempts are bounded: the budget exhausts into gave_up', async () => {
+  const { homeDir } = await createProfileHome('grok-webhook-attempts-');
+  await writeBinding(homeDir, {
+    webhook: { url: 'https://grok.example.com/routine/abc', secret: null, configuredAt: '2026-10-10T01:02:03.000Z' },
+  });
+  let calls = 0;
+  const failing = async () => { calls += 1; return new Response('down', { status: 503 }); };
+
+  const first = await deliverGrokBotPrivateChat({ homeDir, message: sampleMessage(), fetchImpl: failing });
+  const second = await deliverGrokBotPrivateChat({ homeDir, message: sampleMessage(), fetchImpl: failing });
+  const third = await deliverGrokBotPrivateChat({ homeDir, message: sampleMessage(), fetchImpl: failing });
+  const fourth = await deliverGrokBotPrivateChat({ homeDir, message: sampleMessage(), fetchImpl: failing });
+
+  assert.deepEqual([first, second, third, fourth], ['failed', 'failed', 'gave_up', 'gave_up']);
+  assert.equal(calls, 3);
+
+  // A later success clears the budget for that message.
+  const reset = await deliverGrokBotPrivateChat({
+    homeDir,
+    message: sampleMessage({ messagePinId: 'pin-other' }),
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.equal(reset, 'delivered');
 });
 
 test('network errors are recorded once and reported as failed', async () => {

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GROK_BOT_LLM_TASK_POLL_INTERVAL_MS = exports.GROK_BOT_LLM_TASK_TIMEOUT_MS = void 0;
+exports.GROK_BOT_LLM_TASK_TIMEOUT_ENV = exports.GROK_BOT_LLM_TASK_POLL_INTERVAL_MS = exports.GROK_BOT_LLM_TASK_TIMEOUT_MS = void 0;
 exports.createGrokBotWebhookCompletion = createGrokBotWebhookCompletion;
 const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
@@ -13,6 +13,14 @@ const grokBotBinding_1 = require("./grokBotBinding");
 const grokBotWebhook_1 = require("./grokBotWebhook");
 exports.GROK_BOT_LLM_TASK_TIMEOUT_MS = 10 * 60_000;
 exports.GROK_BOT_LLM_TASK_POLL_INTERVAL_MS = 5_000;
+/** Env override for the response-file wait window (slow cloud hosts). */
+exports.GROK_BOT_LLM_TASK_TIMEOUT_ENV = 'OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS';
+function resolveTaskTimeoutMs(optionTimeoutMs) {
+    if (optionTimeoutMs !== undefined)
+        return optionTimeoutMs;
+    const fromEnv = Number(process.env[exports.GROK_BOT_LLM_TASK_TIMEOUT_ENV]);
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : exports.GROK_BOT_LLM_TASK_TIMEOUT_MS;
+}
 /**
  * Passive-LLM channel for Grok Bot-bound profiles. Grok Bot exposes no local
  * LLM endpoint OAC can call, so a generation becomes a structured task: the
@@ -61,7 +69,7 @@ function createGrokBotWebhookCompletion(options) {
                 prompt: request.user,
                 createdAt,
             }, null, 2)}\n`, 'utf8');
-            const posted = await (0, grokBotWebhook_1.postGrokBotWebhook)({
+            let posted = await (0, grokBotWebhook_1.postGrokBotWebhook)({
                 binding,
                 payload: {
                     type: 'llm-task',
@@ -76,6 +84,26 @@ function createGrokBotWebhookCompletion(options) {
                 fetchImpl: options.fetchImpl ?? fetch,
                 timeoutMs: 15_000,
             });
+            // One bounded retry on network-level failure (a brief host stall must not
+            // break the whole turn); HTTP rejections are deliberate and final.
+            if (!posted.ok && !/^HTTP \d/.test(posted.error)) {
+                await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs ?? 5_000));
+                posted = await (0, grokBotWebhook_1.postGrokBotWebhook)({
+                    binding,
+                    payload: {
+                        type: 'llm-task',
+                        host: 'grok-bot',
+                        slug,
+                        taskId,
+                        system: request.system,
+                        prompt: request.user,
+                        responsePath,
+                        createdAt,
+                    },
+                    fetchImpl: options.fetchImpl ?? fetch,
+                    timeoutMs: 15_000,
+                });
+            }
             await (0, grokBotBinding_1.recordGrokBotWebhookDelivery)(bindingPath, {
                 at: now().toISOString(),
                 status: posted.ok ? 'ok' : 'failed',
@@ -87,7 +115,7 @@ function createGrokBotWebhookCompletion(options) {
                 await cleanup();
                 return null;
             }
-            const timeoutMs = options.timeoutMs ?? exports.GROK_BOT_LLM_TASK_TIMEOUT_MS;
+            const timeoutMs = resolveTaskTimeoutMs(options.timeoutMs);
             const pollIntervalMs = options.pollIntervalMs ?? exports.GROK_BOT_LLM_TASK_POLL_INTERVAL_MS;
             const deadlineMs = Date.now() + timeoutMs;
             while (Date.now() < deadlineMs) {

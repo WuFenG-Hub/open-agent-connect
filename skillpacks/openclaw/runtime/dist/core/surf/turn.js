@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SURF_TOOL_ALLOWLIST = exports.SURF_SCHEDULED_TASK_CAP = exports.SURF_TURN_MAX_TOOL_STEPS = void 0;
+exports.parseJsonFence = parseJsonFence;
 exports.withSurfToolLoopContract = withSurfToolLoopContract;
 exports.runSurfTurnWithTools = runSurfTurnWithTools;
 const prompt_js_1 = require("./prompt.js");
@@ -56,7 +57,26 @@ function truncateResult(text, maxChars) {
     return `${text.slice(0, maxChars)}\n…(truncated)`;
 }
 function parseJsonFence(reply) {
-    const fences = [...String(reply ?? '').matchAll(/```(?:json)?\s*([\s\S]*?)```/gu)];
+    const text = String(reply ?? '');
+    // Nested-fence robustness: a tool payload can itself contain markdown fences
+    // (e.g. knowledge_base_add_document content quoting code blocks). The lazy
+    // match closes at the FIRST inner fence and produces broken JSON, so first
+    // try the greedy span from the last ```json opener to the last closing fence.
+    const jsonOpeners = [...text.matchAll(/```json\s*\n/gu)];
+    const lastOpen = jsonOpeners[jsonOpeners.length - 1];
+    const lastClose = text.lastIndexOf('```');
+    if (lastOpen && lastClose > (lastOpen.index ?? 0) + lastOpen[0].length) {
+        try {
+            const parsed = JSON.parse(text.slice((lastOpen.index ?? 0) + lastOpen[0].length, lastClose));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed;
+            }
+        }
+        catch {
+            // Fall through to the legacy lazy-match behavior.
+        }
+    }
+    const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gu)];
     const last = fences[fences.length - 1];
     if (!last)
         return null;
