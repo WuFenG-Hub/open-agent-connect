@@ -103,7 +103,8 @@ const record = {
     marker: process.env.OAC_TEST_MARKER || ''
   },
   requests: [],
-  permissionResponses: []
+  permissionResponses: [],
+  clientResponses: []
 };
 let pendingPromptId = null;
 let activeSessionId = sessionId;
@@ -113,6 +114,12 @@ function save() {
 }
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\\n');
+}
+function sendRawLine(line) {
+  process.stdout.write(line + '\\n');
+}
+function hugePayload() {
+  return 'x'.repeat(17 * 1024 * 1024);
 }
 function response(id, result) {
   send({ jsonrpc: '2.0', id, result });
@@ -130,6 +137,18 @@ function completePrompt(id) {
     save();
     process.exit(0);
   }
+  if (process.env.FAKE_ACP_OVERSIZED_REQUEST === '1') {
+    send({ jsonrpc: '2.0', id: 777, method: 'fs/read_text_file', params: { path: hugePayload() } });
+  }
+  if (process.env.FAKE_ACP_OVERSIZED_NOTIFICATION === '1') {
+    send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: activeSessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: hugePayload() } } } });
+  }
+  if (process.env.FAKE_ACP_OVERSIZED_UNBINDABLE === '1') {
+    sendRawLine('{"jsonrpc":"2.0","id":424242,"result":"' + hugePayload() + '"}');
+  }
+  if (process.env.FAKE_ACP_VENDOR_UPDATE === '1') {
+    notify({ sessionUpdate: 'vendor_custom_event' });
+  }
   notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: provider + ' text ' } });
   notify({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: provider + ' thinking' } });
   notify({ sessionUpdate: 'tool_call', toolCallId: 'tool-acp', name: toolName, title: toolTitle, kind: 'execute', rawInput: { command: 'pwd' } });
@@ -142,10 +161,17 @@ function completePrompt(id) {
   notify({ sessionUpdate: 'turn_end', stopReason: 'end_turn', usage: { inputTokens: 4, outputTokens: 5, cachedReadTokens: 1 } });
   response(id, { stopReason: 'end_turn', usage: { inputTokens: 4, outputTokens: 5, cachedReadTokens: 1 } });
   save();
+  // Large framing fixtures must not exit here: process.exit would truncate the
+  // oversized write before the newline lands. Staying alive on the readline
+  // handle lets the backend close stdin when the turn is done.
+  if (process.env.FAKE_ACP_KEEP_ALIVE === '1') return;
   process.exit(0);
 }
 
 save();
+if (process.env.FAKE_ACP_EXIT_IMMEDIATELY === '1') {
+  process.exit(0);
+}
 const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   if (!line.trim()) return;
@@ -158,7 +184,13 @@ rl.on('line', (line) => {
     return;
   }
 
-  if (!message.method) return;
+  if (!message.method) {
+    if (message.id !== 900) {
+      record.clientResponses.push(message);
+      save();
+    }
+    return;
+  }
   record.requests.push({ method: message.method, params: message.params });
   save();
 
@@ -190,6 +222,10 @@ rl.on('line', (line) => {
   }
   if (message.method === 'session/prompt') {
     pendingPromptId = message.id;
+    if (process.env.FAKE_ACP_OVERSIZED_RESPONSE === '1') {
+      sendRawLine('{"jsonrpc":"2.0","id":' + message.id + ',"result":{"blob":"' + hugePayload() + '"}}');
+      return;
+    }
     const permissionParams = { sessionId: activeSessionId };
     if (provider === 'opencode') {
       permissionParams.options = [
@@ -3467,4 +3503,137 @@ test('ACP backend surfaces provider stderr errors when output is empty', async (
 
   assert.equal(result.status, 'failed');
   assert.match(result.error, /HTTP 400/);
+});
+
+test('ACP backend survives oversized agent requests with a protocol error reply', async () => {
+  const base = await createTempDir();
+  const recordPath = path.join(base, 'hermes-oversized-request-record.json');
+  const binaryPath = await writeExecutableScript(base, 'fake-hermes-oversized-request.js', fakeAcpServerSource());
+  const backend = createHermesBackend(binaryPath, {
+    FAKE_ACP_RECORD_PATH: recordPath,
+    FAKE_ACP_PROVIDER: 'hermes',
+    FAKE_ACP_OVERSIZED_REQUEST: '1',
+    FAKE_ACP_KEEP_ALIVE: '1',
+  });
+  const events = [];
+  const result = await backend.execute(
+    {
+      runtimeId: 'llm_hermes',
+      runtime: { ...runtime, provider: 'hermes', binaryPath },
+      prompt: 'oversized request',
+      cwd: base,
+    },
+    { emit: (event) => events.push(event) },
+    new AbortController().signal,
+  );
+
+  const record = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+  const protocolError = record.clientResponses.find((entry) => entry.id === 777);
+  assert.ok(protocolError, 'backend should answer the oversized request');
+  assert.equal(protocolError.error.code, -32600);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, 'hermes text ');
+  assert.equal(events.some((event) => event.type === 'log' && /oversized fs\/read_text_file request/.test(event.message)), true);
+});
+
+test('ACP backend fails fast when a response frame exceeds the line cap', async () => {
+  const base = await createTempDir();
+  const recordPath = path.join(base, 'hermes-oversized-response-record.json');
+  const binaryPath = await writeExecutableScript(base, 'fake-hermes-oversized-response.js', fakeAcpServerSource());
+  const backend = createHermesBackend(binaryPath, {
+    FAKE_ACP_RECORD_PATH: recordPath,
+    FAKE_ACP_PROVIDER: 'hermes',
+    FAKE_ACP_OVERSIZED_RESPONSE: '1',
+  });
+  const result = await backend.execute(
+    {
+      runtimeId: 'llm_hermes',
+      runtime: { ...runtime, provider: 'hermes', binaryPath },
+      prompt: 'oversized response',
+      cwd: base,
+    },
+    { emit: () => {} },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /session\/prompt response frame exceeded/);
+});
+
+test('ACP backend aborts on an oversized response it cannot bind', async () => {
+  const base = await createTempDir();
+  const recordPath = path.join(base, 'hermes-unbindable-record.json');
+  const binaryPath = await writeExecutableScript(base, 'fake-hermes-unbindable.js', fakeAcpServerSource());
+  const backend = createHermesBackend(binaryPath, {
+    FAKE_ACP_RECORD_PATH: recordPath,
+    FAKE_ACP_PROVIDER: 'hermes',
+    FAKE_ACP_OVERSIZED_UNBINDABLE: '1',
+    FAKE_ACP_KEEP_ALIVE: '1',
+  });
+  const result = await backend.execute(
+    {
+      runtimeId: 'llm_hermes',
+      runtime: { ...runtime, provider: 'hermes', binaryPath },
+      prompt: 'unbindable response',
+      cwd: base,
+    },
+    { emit: () => {} },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /could not be bound to a request/);
+});
+
+test('ACP backend ignores oversized notifications and unrecognized update kinds', async () => {
+  const base = await createTempDir();
+  const recordPath = path.join(base, 'hermes-oversized-notification-record.json');
+  const binaryPath = await writeExecutableScript(base, 'fake-hermes-oversized-notification.js', fakeAcpServerSource());
+  const backend = createHermesBackend(binaryPath, {
+    FAKE_ACP_RECORD_PATH: recordPath,
+    FAKE_ACP_PROVIDER: 'hermes',
+    FAKE_ACP_OVERSIZED_NOTIFICATION: '1',
+    FAKE_ACP_VENDOR_UPDATE: '1',
+    FAKE_ACP_KEEP_ALIVE: '1',
+  });
+  const events = [];
+  const result = await backend.execute(
+    {
+      runtimeId: 'llm_hermes',
+      runtime: { ...runtime, provider: 'hermes', binaryPath },
+      prompt: 'oversized notification',
+      cwd: base,
+    },
+    { emit: (event) => events.push(event) },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, 'hermes text ');
+  assert.equal(events.some((event) => event.type === 'log' && /dropped an oversized frame/.test(event.message)), true);
+  assert.equal(events.some((event) => event.type === 'log' && /ignored session update kind: vendor_custom_event/.test(event.message)), true);
+});
+
+test('ACP backend fails cleanly when the agent exits before initialize', async () => {
+  const base = await createTempDir();
+  const recordPath = path.join(base, 'hermes-early-exit-record.json');
+  const binaryPath = await writeExecutableScript(base, 'fake-hermes-early-exit.js', fakeAcpServerSource());
+  const backend = createHermesBackend(binaryPath, {
+    FAKE_ACP_RECORD_PATH: recordPath,
+    FAKE_ACP_PROVIDER: 'hermes',
+    FAKE_ACP_EXIT_IMMEDIATELY: '1',
+  });
+  const result = await backend.execute(
+    {
+      runtimeId: 'llm_hermes',
+      runtime: { ...runtime, provider: 'hermes', binaryPath },
+      prompt: 'early exit',
+      cwd: base,
+    },
+    { emit: () => {} },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /exited before initialize|agent stdin failed/);
 });
