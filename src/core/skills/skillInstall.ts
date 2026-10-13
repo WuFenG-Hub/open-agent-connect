@@ -2,7 +2,8 @@
  * On-chain skill package installation — OAC port of the IDBots
  * skillInstallService consumer half. A `metabot-skill` protocol pin points at
  * a zip package (`skill-file: metafile://<pinId>.zip`); this module downloads
- * that archive, extracts it safely, and installs it as a regular skill
+ * that archive, verifies it against the pin's `sha256` when present, extracts
+ * it safely, and installs it as a regular skill
  * directory under the shared skills root (`~/.metabot/skills/<name>/`),
  * recording provenance in the installed-skills registry so host skill
  * binding can pick it up like any local skill.
@@ -12,7 +13,7 @@
  * are validated before they become directory names.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { metaAppArchiveUrls } from '../metaapp/artifactDownload';
@@ -30,10 +31,10 @@ export const SKILL_REGISTRY_FILENAME = 'installed-skills.json';
 const SKILL_DOC_FILENAMES = ['SKILL.md', 'skill.md', 'Skill.md'];
 
 export class SkillInstallError extends Error {
-  code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'name_conflict';
+  code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict';
 
   constructor(
-    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'name_conflict',
+    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict',
     message: string,
   ) {
     super(message);
@@ -72,6 +73,8 @@ export interface SkillInstallSource {
   payloadName?: string;
   payloadVersion?: string;
   payloadDescription?: string;
+  /** Archive sha256 advertised by the source pin; verified after download. */
+  payloadSha256?: string;
 }
 
 export interface SkillInstallResult {
@@ -211,6 +214,8 @@ export function extractSkillPinDescriptor(pin: {
   description: string;
   version: string;
   skillFileUri: string;
+  /** Advertised archive sha256; empty on pins published before the field existed. */
+  sha256: string;
 } | null {
   const payload = pin.payload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
@@ -225,6 +230,7 @@ export function extractSkillPinDescriptor(pin: {
     description: normalizeText(record.description),
     version: normalizeText(record.version ?? record.skillVersion) || '0',
     skillFileUri,
+    sha256: normalizeText(record.sha256).toLowerCase(),
   };
 }
 
@@ -238,6 +244,8 @@ export async function downloadSkillArchive(input: {
   fetchImpl: typeof fetch;
   maxBytes?: number;
   timeoutMs?: number;
+  /** Archive sha256 advertised by the source pin; a mismatch refuses the install. */
+  expectedSha256?: string;
 }): Promise<Buffer> {
   const reference = normalizeText(input.contentReference);
   const urls = metaAppArchiveUrls(reference);
@@ -249,6 +257,7 @@ export async function downloadSkillArchive(input: {
   }
   const maxBytes = input.maxBytes ?? MAX_SKILL_PACKAGE_BYTES;
   const timeoutMs = input.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+  const expectedSha256 = normalizeText(input.expectedSha256).toLowerCase();
   const failures: string[] = [];
   for (const url of urls) {
     const controller = new AbortController();
@@ -276,6 +285,15 @@ export async function downloadSkillArchive(input: {
           'invalid_package',
           `Skill package exceeds the ${Math.round(maxBytes / 1024)} KB cap (${Math.round(archive.byteLength / 1024)} KB): ${reference}`,
         );
+      }
+      if (expectedSha256) {
+        const actualSha256 = createHash('sha256').update(archive).digest('hex');
+        if (actualSha256 !== expectedSha256) {
+          throw new SkillInstallError(
+            'digest_mismatch',
+            `Skill package digest mismatch for ${reference}: the pin advertises sha256 ${expectedSha256} but the download hashes to ${actualSha256}. The archive may be corrupted or tampered with; refusing to install.`,
+          );
+        }
       }
       return archive;
     } catch (error) {
@@ -505,7 +523,7 @@ export async function installSkillArchive(input: {
   }
 }
 
-/** Full flow: download the package archive, then install it. */
+/** Full flow: download the package archive (verifying the pin's digest when advertised), then install it. */
 export async function installSkillFromReference(input: {
   skillsRoot: string;
   contentReference: string;
@@ -519,6 +537,7 @@ export async function installSkillFromReference(input: {
     contentReference: input.contentReference,
     fetchImpl: input.fetchImpl,
     maxBytes: input.maxBytes,
+    expectedSha256: input.source?.payloadSha256,
   });
   return installSkillArchive({
     skillsRoot: input.skillsRoot,

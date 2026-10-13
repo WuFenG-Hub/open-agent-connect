@@ -73,7 +73,8 @@ test('previewSkillProject derives metadata from frontmatter and reports real arc
   assert.equal(plan.payload.name, 'demo-skill');
   assert.equal(plan.payload.version, '1.2.3');
   assert.equal(plan.payload['skill-file'], 'metafile://<uploaded-skill-zip-pin>.zip');
-  assert.equal(Object.keys(plan.payload).length, 4);
+  assert.equal(plan.payload.sha256, plan.archive.sha256);
+  assert.equal(Object.keys(plan.payload).length, 5);
   assert.ok(plan.archive.bytes > 0);
   assert.match(plan.archive.sha256, /^[0-9a-f]{64}$/);
   assert.equal(plan.archive.fileCount, 2);
@@ -204,10 +205,12 @@ test('publishSkill with confirm uploads the zip then writes the protocol pin', a
   assert.equal(writes[0].contentType, 'application/json');
 
   const payload = JSON.parse(writes[0].payload);
-  assert.deepEqual(Object.keys(payload).sort(), ['description', 'name', 'skill-file', 'version']);
+  assert.deepEqual(Object.keys(payload).sort(), ['description', 'name', 'sha256', 'skill-file', 'version']);
   assert.equal(payload.name, 'demo-skill');
   assert.equal(payload.version, '1.2.3');
   assert.equal(payload['skill-file'], `metafile://${UPLOAD_PIN_ID}.zip`);
+  assert.match(payload.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(payload.sha256, result.archive.sha256);
 
   assert.equal(result.pinId, PROTOCOL_PIN_ID);
   assert.equal(result.skillFileUri, `metafile://${UPLOAD_PIN_ID}.zip`);
@@ -252,6 +255,7 @@ test('round trip: a published package installs cleanly from its pin payload', as
   assert.equal(descriptor.name, 'roundtrip-skill');
   assert.equal(descriptor.version, '1.2.3');
   assert.equal(descriptor.skillFileUri, result.skillFileUri);
+  assert.equal(descriptor.sha256, result.archive.sha256);
 
   const skillsRoot = path.join(root, 'skills');
   const installed = await installSkillArchive({

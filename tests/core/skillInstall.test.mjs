@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -14,6 +15,7 @@ const {
   extractSkillPinDescriptor,
   downloadSkillArchive,
   installSkillArchive,
+  installSkillFromReference,
   listInstalledSkills,
   readInstalledSkill,
   uninstallInstalledSkill,
@@ -128,7 +130,13 @@ test('extractSkillPinDescriptor accepts known payload spellings', () => {
       payload: { name: 'metabot-example', 'skill-file': `metafile://${ZIP_PIN_ID}.zip`, version: '1.2', description: 'd' },
       creator: { globalMetaId: 'IDQ1', name: 'Fisher' },
     }),
-    { name: 'metabot-example', description: 'd', version: '1.2', skillFileUri: `metafile://${ZIP_PIN_ID}.zip` },
+    { name: 'metabot-example', description: 'd', version: '1.2', skillFileUri: `metafile://${ZIP_PIN_ID}.zip`, sha256: '' },
+  );
+  assert.deepEqual(
+    extractSkillPinDescriptor({
+      payload: { name: 'metabot-example', 'skill-file': `metafile://${ZIP_PIN_ID}.zip`, sha256: 'AB'.repeat(32) },
+    }),
+    { name: 'metabot-example', description: '', version: '0', skillFileUri: `metafile://${ZIP_PIN_ID}.zip`, sha256: 'ab'.repeat(32) },
   );
   assert.ok(extractSkillPinDescriptor({ payload: { skillName: 'x', skillFileUri: `metafile://${ZIP_PIN_ID}` } }));
   assert.equal(extractSkillPinDescriptor({ payload: { name: 'x' } }), null);
@@ -181,6 +189,61 @@ test('downloadSkillArchive enforces the package size cap', async () => {
       }),
     }),
     (error) => error instanceof SkillInstallError && error.code === 'invalid_package',
+  );
+});
+
+test('downloadSkillArchive verifies the advertised sha256 and refuses mismatches', async () => {
+  const archive = Buffer.from('pk-zip-bytes');
+  const advertised = createHash('sha256').update(archive).digest('hex');
+
+  const fetched = await downloadSkillArchive({
+    contentReference: `metafile://${ZIP_PIN_ID}`,
+    fetchImpl: async () => zipResponse(archive),
+    expectedSha256: advertised.toUpperCase(),
+  });
+  assert.deepEqual(fetched, archive);
+
+  await assert.rejects(
+    downloadSkillArchive({
+      contentReference: `metafile://${ZIP_PIN_ID}`,
+      fetchImpl: async () => zipResponse(Buffer.from('tampered-pk-zip-bytes')),
+      expectedSha256: advertised,
+    }),
+    (error) => error instanceof SkillInstallError && error.code === 'digest_mismatch' && /digest mismatch/.test(error.message),
+  );
+
+  // No advertised digest (legacy pin): nothing to verify against, download proceeds.
+  const legacy = await downloadSkillArchive({
+    contentReference: `metafile://${ZIP_PIN_ID}`,
+    fetchImpl: async () => zipResponse(archive),
+  });
+  assert.deepEqual(legacy, archive);
+});
+
+test('installSkillFromReference verifies the pin-advertised digest end to end', async () => {
+  const root = mkdtempTempRootSync();
+  const zip = await makeSkillZip(path.join(root, 'pkg'), {
+    'SKILL.md': skillDoc('digest-roundtrip', '2.0.0'),
+  });
+  const advertised = createHash('sha256').update(zip).digest('hex');
+
+  const installed = await installSkillFromReference({
+    skillsRoot: path.join(root, 'skills'),
+    contentReference: `metafile://${ZIP_PIN_ID}.zip`,
+    fetchImpl: async () => zipResponse(zip),
+    source: { payloadSha256: advertised },
+  });
+  assert.equal(installed.name, 'digest-roundtrip');
+  assert.equal(installed.version, '2.0.0');
+
+  await assert.rejects(
+    installSkillFromReference({
+      skillsRoot: path.join(root, 'skills2'),
+      contentReference: `metafile://${ZIP_PIN_ID}.zip`,
+      fetchImpl: async () => zipResponse(Buffer.concat([zip, Buffer.from('x')])),
+      source: { payloadSha256: advertised },
+    }),
+    (error) => error instanceof SkillInstallError && error.code === 'digest_mismatch',
   );
 });
 

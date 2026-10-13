@@ -3535,6 +3535,11 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
           creator?.globalMetaId ? `- publisher: ${creator.name || creator.globalMetaId} (${creator.globalMetaId})` : null,
           pinId ? `- source pin: ${pinId}` : null,
           `- package: ${contentReference}`,
+          descriptor?.sha256
+            ? `- package sha256: ${descriptor.sha256} (verified on download)`
+            : pinId
+              ? '- warning: the pin advertises no package sha256 — content cannot be verified (legacy pin; installed as-is)'
+              : null,
           `- target: ${sharedSkillsRoot()}/<name>/ (local disk only; rebinds installed hosts afterwards)`,
           '',
           'Re-run with --confirm to install.',
@@ -3554,6 +3559,7 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
           ...(payloadName ? { payloadName } : {}),
           ...(descriptor?.version ? { payloadVersion: descriptor.version } : {}),
           ...(descriptor?.description ? { payloadDescription: descriptor.description } : {}),
+          ...(descriptor?.sha256 ? { payloadSha256: descriptor.sha256 } : {}),
         },
       });
 
