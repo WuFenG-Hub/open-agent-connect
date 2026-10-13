@@ -96,7 +96,12 @@ const toolName = process.env.FAKE_ACP_TOOL_NAME || '';
 const sessionId = process.env.FAKE_ACP_SESSION_ID || provider + '-session-new';
 const record = {
   argv: process.argv.slice(2),
-  env: { HERMES_YOLO_MODE: process.env.HERMES_YOLO_MODE || '' },
+  env: {
+    HERMES_YOLO_MODE: process.env.HERMES_YOLO_MODE || '',
+    OPENCODE_CLIENT: process.env.OPENCODE_CLIENT || '',
+    OPENCODE_ENABLE_QUESTION_TOOL: process.env.OPENCODE_ENABLE_QUESTION_TOOL || '',
+    marker: process.env.OAC_TEST_MARKER || ''
+  },
   requests: [],
   permissionResponses: []
 };
@@ -128,7 +133,11 @@ function completePrompt(id) {
   notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: provider + ' text ' } });
   notify({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: provider + ' thinking' } });
   notify({ sessionUpdate: 'tool_call', toolCallId: 'tool-acp', name: toolName, title: toolTitle, kind: 'execute', rawInput: { command: 'pwd' } });
-  notify({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-acp', status: 'completed', title: toolTitle, kind: 'execute', rawOutput: 'tool ok' });
+  // OpenCode nests a command's output and exit code under rawOutput.metadata.
+  const toolRawOutput = provider === 'opencode'
+    ? { output: 'tool ok', metadata: { exit: 0, output: 'tool ok' } }
+    : 'tool ok';
+  notify({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-acp', status: 'completed', title: toolTitle, kind: 'execute', rawOutput: toolRawOutput });
   notify({ sessionUpdate: 'usage_update', usage: { inputTokens: 2, outputTokens: 3, cachedReadTokens: 1 } });
   notify({ sessionUpdate: 'turn_end', stopReason: 'end_turn', usage: { inputTokens: 4, outputTokens: 5, cachedReadTokens: 1 } });
   response(id, { stopReason: 'end_turn', usage: { inputTokens: 4, outputTokens: 5, cachedReadTokens: 1 } });
@@ -175,9 +184,21 @@ rl.on('line', (line) => {
     }
     return;
   }
+  if (message.method === 'session/set_config_option') {
+    response(message.id, {});
+    return;
+  }
   if (message.method === 'session/prompt') {
     pendingPromptId = message.id;
-    send({ jsonrpc: '2.0', id: 900, method: 'session/request_permission', params: { sessionId: activeSessionId } });
+    const permissionParams = { sessionId: activeSessionId };
+    if (provider === 'opencode') {
+      permissionParams.options = [
+        { optionId: 'once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'always', kind: 'allow_always', name: 'Always allow' },
+        { optionId: 'reject', kind: 'reject_once', name: 'Reject' }
+      ];
+    }
+    send({ jsonrpc: '2.0', id: 900, method: 'session/request_permission', params: permissionParams });
     return;
   }
   errorResponse(message.id, 'unexpected method ' + message.method);
@@ -241,7 +262,8 @@ test('registry preserves Claude Code and Codex executor metadata', async () => {
   assert.equal(workbuddy.executor.launchCommand, 'codebuddy -p --output-format stream-json --input-format stream-json --permission-mode bypassPermissions');
 
   const opencode = getPlatformDefinition('opencode');
-  assert.equal(opencode.executor.launchCommand, 'opencode run --format json --dangerously-skip-permissions --dir <cwd>');
+  assert.equal(opencode.executor.kind, 'acp-opencode');
+  assert.equal(opencode.executor.launchCommand, 'opencode acp');
 });
 
 test('registry backend factory helper covers every managed provider and CLI runtime uses it', async () => {
@@ -2030,93 +2052,6 @@ setTimeout(() => {
   assert.ok(Date.now() - startedAt < 1_000);
 });
 
-test('OpenCode backend launches run JSON mode and normalizes tool/usage events', async () => {
-  const base = await createTempDir();
-  const argsPath = path.join(base, 'args.json');
-  const envPath = path.join(base, 'env.json');
-  const binaryPath = await writeExecutableScript(base, 'fake-opencode.js', `#!/usr/bin/env node
-const fs = require('node:fs');
-fs.writeFileSync(process.env.FAKE_OPENCODE_ARGS_PATH, JSON.stringify(process.argv.slice(2)));
-fs.writeFileSync(process.env.FAKE_OPENCODE_ENV_PATH, JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD || '', marker: process.env.OAC_TEST_MARKER || '', permission: process.env.OPENCODE_PERMISSION || '' }));
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + '\\n');
-}
-send({ type: 'step_start', sessionID: 'opencode-session-1' });
-send({ type: 'text', part: { text: 'OpenCode ' } });
-send({ type: 'tool_use', part: { id: 'prt_opencode', callID: 'tool-opencode', tool: 'bash', state: { input: { command: 'pwd' }, status: 'completed', output: { text: 'ok' } } } });
-send({ type: 'step_finish', sessionID: 'opencode-session-1', part: { tokens: { input: 5, output: 6, cache: { read: 1, write: 2 } } } });
-`);
-  const backend = createOpenCodeBackend(binaryPath, {
-    FAKE_OPENCODE_ARGS_PATH: argsPath,
-    FAKE_OPENCODE_ENV_PATH: envPath,
-  });
-  const events = [];
-  const result = await backend.execute(
-    {
-      runtimeId: 'llm_opencode',
-      runtime: { ...runtime, provider: 'opencode', binaryPath },
-      prompt: 'hello opencode',
-      systemPrompt: 'system opencode',
-      cwd: base,
-      model: 'opencode-model',
-      resumeSessionId: 'opencode-old',
-      env: { OAC_TEST_MARKER: 'opencode-env', OPENCODE_PERMISSION: '{}' },
-      extraArgs: ['--format', 'text', '--debug'],
-    },
-    { emit: (event) => events.push(event) },
-    new AbortController().signal,
-  );
-
-  const args = JSON.parse(await fs.readFile(argsPath, 'utf8'));
-  assert.deepEqual(args.slice(0, 6), ['run', '--format', 'json', '--dangerously-skip-permissions', '--dir', base]);
-  assert.ok(args.includes('--model'));
-  assert.ok(args.includes('opencode-model'));
-  assert.ok(args.includes('--session'));
-  assert.ok(args.includes('opencode-old'));
-  assert.ok(args.includes('--debug'));
-  assert.equal(args.includes('text'), false);
-  // system + user are delivered as ONE positional message (no --prompt flag).
-  assert.equal(args.includes('--prompt'), false);
-  assert.equal(args.at(-1), 'system opencode\n\nhello opencode');
-  const envSnapshot = JSON.parse(await fs.readFile(envPath, 'utf8'));
-  await assertSameRealpath(envSnapshot.cwd, base);
-  await assertSameRealpath(envSnapshot.pwd, base);
-  assert.equal(envSnapshot.marker, 'opencode-env');
-  assert.equal(envSnapshot.permission, '{"*":"allow"}');
-  assert.equal(result.status, 'completed');
-  assert.equal(result.output, 'OpenCode ');
-  assert.equal(result.providerSessionId, 'opencode-session-1');
-  assert.equal(result.usage['opencode-model'].inputTokens, 5);
-  assert.equal(result.usage['opencode-model'].cacheWriteTokens, 2);
-  assert.equal(events.some((event) => event.type === 'tool_use' && event.tool === 'bash'), true);
-  assert.equal(events.some((event) => event.type === 'tool_use' && event.callId === 'tool-opencode' && event.input.command === 'pwd'), true);
-  assert.equal(events.some((event) => event.type === 'tool_result' && event.output.includes('ok')), true);
-});
-
-test('OpenCode backend surfaces structured error data messages', async () => {
-  const base = await createTempDir();
-  const binaryPath = await writeExecutableScript(base, 'fake-opencode-structured-error.js', `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({ type: 'error', error: { name: 'ProviderError', data: { message: 'opencode structured failure' } } }) + '\\n');
-process.exit(1);
-`);
-  const backend = createOpenCodeBackend(binaryPath);
-  const events = [];
-  const result = await backend.execute(
-    {
-      runtimeId: 'llm_opencode',
-      runtime: { ...runtime, provider: 'opencode', binaryPath },
-      prompt: 'structured opencode error',
-      cwd: base,
-    },
-    { emit: (event) => events.push(event) },
-    new AbortController().signal,
-  );
-
-  assert.equal(result.status, 'failed');
-  assert.match(result.error, /opencode structured failure/);
-  assert.equal(events.some((event) => event.type === 'error' && /opencode structured failure/.test(event.message)), true);
-});
-
 test('Gemini backend launches stream-json mode and normalizes assistant/tool/stats events', async () => {
   const base = await createTempDir();
   const argsPath = path.join(base, 'args.json');
@@ -3324,6 +3259,8 @@ const acpProviderCases = [
     toolTitle: 'terminal: pwd',
     expectedTool: 'terminal',
     expectsYoloEnv: true,
+    expectedPermissionOption: 'approve_for_session',
+    modelSwitchMethod: 'session/set_model',
   },
   {
     label: 'Kimi',
@@ -3334,6 +3271,8 @@ const acpProviderCases = [
     toolTitle: 'Run command: pwd',
     expectedTool: 'terminal',
     expectsYoloEnv: false,
+    expectedPermissionOption: 'approve_for_session',
+    modelSwitchMethod: 'session/set_model',
   },
   {
     label: 'Kiro',
@@ -3344,6 +3283,20 @@ const acpProviderCases = [
     toolTitle: 'Run command: pwd',
     expectedTool: 'terminal',
     expectsYoloEnv: false,
+    expectedPermissionOption: 'approve_for_session',
+    modelSwitchMethod: 'session/set_model',
+  },
+  {
+    label: 'OpenCode',
+    provider: 'opencode',
+    createBackend: createOpenCodeBackend,
+    expectedArgs: ['acp', '--debug'],
+    resumeMethod: 'session/resume',
+    toolTitle: 'bash',
+    expectedTool: 'bash',
+    expectsYoloEnv: false,
+    expectedPermissionOption: 'always',
+    modelSwitchMethod: 'session/set_config_option',
   },
 ];
 
@@ -3367,6 +3320,7 @@ test('ACP backends launch, create sessions, set model, prompt, stream events, an
         systemPrompt: `${providerCase.provider} system`,
         cwd: base,
         model: `${providerCase.provider}-model`,
+        env: { OAC_TEST_MARKER: `${providerCase.provider}-env` },
         extraArgs: providerCase.provider === 'kiro'
           ? ['acp', '--trust-all-tools', '--trust-tools', 'blocked', '-a', '--debug']
           : ['acp', '--debug'],
@@ -3378,6 +3332,11 @@ test('ACP backends launch, create sessions, set model, prompt, stream events, an
     const record = JSON.parse(await fs.readFile(recordPath, 'utf8'));
     assert.deepEqual(record.argv, providerCase.expectedArgs);
     assert.equal(record.env.HERMES_YOLO_MODE, providerCase.expectsYoloEnv ? '1' : '');
+    assert.equal(record.env.marker, `${providerCase.provider}-env`);
+    if (providerCase.provider === 'opencode') {
+      assert.equal(record.env.OPENCODE_CLIENT, 'acp');
+      assert.equal(record.env.OPENCODE_ENABLE_QUESTION_TOOL, 'false');
+    }
 
     const initialize = record.requests.find((entry) => entry.method === 'initialize');
     assert.equal(initialize.params.protocolVersion, 1);
@@ -3393,9 +3352,15 @@ test('ACP backends launch, create sessions, set model, prompt, stream events, an
       assert.equal(sessionNew.params.model, undefined);
     }
 
-    const setModel = record.requests.find((entry) => entry.method === 'session/set_model');
-    assert.equal(setModel.params.sessionId, `${providerCase.provider}-session-new`);
-    assert.equal(setModel.params.modelId, `${providerCase.provider}-model`);
+    const modelSwitch = record.requests.find((entry) => entry.method === providerCase.modelSwitchMethod);
+    assert.ok(modelSwitch, `${providerCase.provider} should call ${providerCase.modelSwitchMethod}`);
+    assert.equal(modelSwitch.params.sessionId, `${providerCase.provider}-session-new`);
+    if (providerCase.provider === 'opencode') {
+      assert.equal(modelSwitch.params.configId, 'model');
+      assert.equal(modelSwitch.params.value, `${providerCase.provider}-model`);
+    } else {
+      assert.equal(modelSwitch.params.modelId, `${providerCase.provider}-model`);
+    }
 
     const prompt = record.requests.find((entry) => entry.method === 'session/prompt');
     assert.equal(prompt.params.sessionId, `${providerCase.provider}-session-new`);
@@ -3404,7 +3369,7 @@ test('ACP backends launch, create sessions, set model, prompt, stream events, an
       assert.deepEqual(prompt.params.content, prompt.params.prompt);
     }
 
-    assert.equal(record.permissionResponses[0].outcome.optionId, 'approve_for_session');
+    assert.equal(record.permissionResponses[0].outcome.optionId, providerCase.expectedPermissionOption);
     assert.equal(result.status, 'completed');
     assert.equal(result.output, `${providerCase.provider} text `);
     assert.equal(result.providerSessionId, `${providerCase.provider}-session-new`);
@@ -3446,7 +3411,7 @@ test('ACP backends resume sessions with provider-specific methods', async () => 
     if (providerCase.provider === 'kiro') {
       assert.deepEqual(resume.params.mcpServers, []);
     }
-    assert.equal(record.requests.some((entry) => entry.method === 'session/set_model'), false);
+    assert.equal(record.requests.some((entry) => entry.method === providerCase.modelSwitchMethod), false);
     assert.equal(result.status, 'completed');
     assert.equal(result.providerSessionId, `${providerCase.provider}-existing-session`);
   }
