@@ -576,3 +576,90 @@ test('generatePreset (registry backend): composes from the installed dsh-web-app
     await rm(tmp, { recursive: true, force: true })
   }
 })
+
+test('generatePreset (registry backend): the own-location anchor does not depend on the process cwd', async () => {
+  // `import.meta.url` is a file:// URL, which is not a valid require.resolve
+  // `paths` entry: Node then treats it as a relative path and resolves it
+  // against process.cwd(), so the fallback only ever worked when the runner
+  // happened to run from the plugin directory. Resolve from an unrelated cwd
+  // to pin the path-based behaviour.
+  const tmp = await mkdtemp(join(tmpdir(), 'oac-dsh-preset-cwd-'))
+  const previousCwd = process.cwd()
+  const mock = createMockRegistryPresets()
+  const ctx = {
+    agentPresets: mock.agentPresets,
+    dshHomePath: (...segments) => join(tmp, ...segments),
+    webRuntime: { trustedHosts: [] },
+    webServer: { register: () => () => {} },
+    effect: (fn) => { fn() },
+  }
+  try {
+    process.chdir(tmp)
+    await plugin.generatePreset(ctx, makeBot({ slug: 'cwdok', name: 'Cwd' }))
+    assert.equal(mock.calls.register.length, 1)
+    assert.ok(
+      mock.calls.register[0].plugins.some((entry) => entry.id === 'tool-bash'),
+      'the devDependency copy resolved from the plugin install, not from the cwd',
+    )
+    await plugin.removePreset(ctx, 'cwdok')
+  } finally {
+    process.chdir(previousCwd)
+    await rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('generatePreset (registry backend): resolves the shipped standard patch from the installation scope', async () => {
+  // DSH desktop layout: the kernel packages are composed from the installation
+  // scope and never land in the profile's node_modules, so only the
+  // installation anchor (profileContext.installAnchor) reaches them. The
+  // fixture patch carries a marker row the repository's own devDependency copy
+  // does not, which keeps this test honest about WHICH anchor resolved.
+  const installPatch = `# fixture standard preset declaration (installation scope)
+- insert:
+    - id: preset-standard
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: standard
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: You are a coding agent powered by the {{model}} model.
+          - id: tool-installation-scope
+            name: '@deepseek-ai/dsh-tool-installation-scope'
+`
+  const tmp = await mkdtemp(join(tmpdir(), 'oac-dsh-preset-install-'))
+  const profileDir = join(tmp, 'profile')
+  const webAppDir = join(tmp, 'install', 'node_modules', '@deepseek-ai', 'dsh-web-app')
+  const dshPackageDir = join(tmp, 'install', 'node_modules', '@deepseek-ai', 'dsh')
+  await mkdir(join(webAppDir, 'presets'), { recursive: true })
+  await mkdir(profileDir, { recursive: true })
+  await mkdir(dshPackageDir, { recursive: true })
+  await writeFile(join(webAppDir, 'presets', 'standard.patch.yml'), installPatch, 'utf8')
+  await writeFile(join(dshPackageDir, 'package.json'), '{ "name": "@deepseek-ai/dsh" }\n', 'utf8')
+  const mock = createMockRegistryPresets()
+  const ctx = {
+    agentPresets: mock.agentPresets,
+    get: (key) => (key === 'profileContext'
+      ? { dir: profileDir, installAnchor: join(dshPackageDir, 'package.json') }
+      : undefined),
+    dshHomePath: (...segments) => join(tmp, ...segments),
+    logger: { warn: () => {} },
+    webRuntime: { trustedHosts: [] },
+    webServer: { register: () => () => {} },
+    effect: (fn) => { fn() },
+  }
+  try {
+    await plugin.generatePreset(ctx, makeBot({ slug: 'instscope', name: 'Installed' }))
+    assert.equal(mock.calls.register.length, 1)
+    assert.ok(
+      mock.calls.register[0].plugins.some((entry) => entry.id === 'tool-installation-scope'),
+      'the installation scope patch resolved, not the profile or the devDependency copy',
+    )
+    await plugin.removePreset(ctx, 'instscope')
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
+})
