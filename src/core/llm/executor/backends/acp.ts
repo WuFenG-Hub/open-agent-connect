@@ -1,21 +1,16 @@
 import { spawn } from 'node:child_process';
-import readline from 'node:readline';
 import type { LlmExecutionRequest, LlmExecutionResult, LlmEventEmitter, LlmTokenUsage } from '../types';
 import { buildProcessEnv, filterBlockedArgs, shutdownChildProcess, stringifyError, type BlockedArgSpec, type LlmBackend } from './backend';
 import type { AcpDialect } from './acp-dialect';
+import { ACP_NDJSON_MAX_LINE_BYTES, createBoundedNdjsonFramer, type AcpRejectedRecord } from './acp-ndjson-framer';
+import { classifyAcpRecordPrefix } from './acp-rpc-prefix';
+import { AcpWriteQueue } from './acp-write-queue';
+import type { AcpIncomingEnvelope, AcpRpcMessage } from './acp-protocol';
 import { extractUsage, getString, isRecord, stringifyContent, usageRecordHasTokens } from './jsonProcess';
 
 const DEFAULT_ACP_TIMEOUT_MS = 1_200_000;
 const ACP_USAGE_KEY_FALLBACK = 'unknown';
-
-interface JsonRpcMessage {
-  jsonrpc?: string;
-  id?: number | string;
-  method?: string;
-  params?: unknown;
-  result?: unknown;
-  error?: unknown;
-}
+const ACP_DEBUG_LOG_LINE_MAX = 2000;
 
 interface PendingRpc {
   method: string;
@@ -44,6 +39,8 @@ export interface AcpBackendOptions {
   gateNotificationsUntilPrompt?: boolean;
   /** Per-provider deviations; see acp-dialect.ts. */
   dialect?: AcpDialect;
+  /** Inbound ndjson line cap; oversized lines are classified and rejected. */
+  maxLineBytes?: number;
 }
 
 function combineArgs(options: AcpBackendOptions, request: LlmExecutionRequest): string[] {
@@ -198,8 +195,37 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         child.once('error', (error) => resolve(error));
       });
 
-      const writeJson = (message: JsonRpcMessage) => {
-        child.stdin.write(`${JSON.stringify(message)}\n`);
+      const maxLineBytes = options.maxLineBytes ?? ACP_NDJSON_MAX_LINE_BYTES;
+      const writeQueue = new AcpWriteQueue(child.stdin);
+
+      let transportFailed: string | undefined;
+      const failTransport = (reason: string): void => {
+        if (transportFailed) return;
+        transportFailed = reason;
+        writeQueue.close(new Error(reason));
+        for (const pendingRequest of pending.values()) {
+          pendingRequest.reject(new Error(reason));
+        }
+        pending.clear();
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // Best effort.
+        }
+      };
+
+      // An EPIPE on stdin means the agent is gone; without this listener the
+      // stream error would escape as an unhandled error and crash the host.
+      child.stdin.on('error', (error: Error) => {
+        failTransport(`${options.provider} agent stdin failed: ${stringifyError(error)}`);
+      });
+
+      const sendRecord = (record: AcpRpcMessage): Promise<void> => {
+        const line = `${JSON.stringify(record)}\n`;
+        if (Buffer.byteLength(line, 'utf8') > maxLineBytes) {
+          return Promise.reject(new Error(`${options.provider} outgoing frame exceeded ${maxLineBytes} bytes`));
+        }
+        return writeQueue.write(line);
       };
 
       const requestRpc = (method: string, params: Record<string, unknown>): Promise<unknown> => {
@@ -207,16 +233,15 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         nextId += 1;
         return new Promise((resolve, reject) => {
           pending.set(id, { method, resolve, reject });
-          try {
-            writeJson({ jsonrpc: '2.0', id, method, params });
-          } catch (error) {
+          sendRecord({ jsonrpc: '2.0', id, method, params }).catch((error: unknown) => {
+            if (!pending.has(id)) return;
             pending.delete(id);
             reject(error instanceof Error ? error : new Error(stringifyError(error)));
-          }
+          });
         });
       };
 
-      const handleAgentRequest = (message: JsonRpcMessage) => {
+      const handleAgentRequest = (message: AcpIncomingEnvelope) => {
         if (message.id === undefined) return;
         if (message.method === 'session/request_permission') {
           // Unattended bot turns approve tool use; prefer an offered
@@ -224,13 +249,13 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
           // vocabulary, and fall back to the historical fixed option id for
           // agents that offer no options to pick from.
           const params = isRecord(message.params) ? message.params : {};
-          const offered = Array.isArray(params.options) ? params.options : [];
-          const allowOption = offered.find((option) => isRecord(option) && option.kind === 'allow_always')
-            ?? offered.find((option) => isRecord(option) && option.kind === 'allow_once');
+          const offered = (Array.isArray(params.options) ? params.options : []) as unknown[];
+          const allowOption = offered.find((option: unknown) => isRecord(option) && option.kind === 'allow_always')
+            ?? offered.find((option: unknown) => isRecord(option) && option.kind === 'allow_once');
           const optionId = allowOption && isRecord(allowOption) && typeof allowOption.optionId === 'string'
             ? allowOption.optionId
             : 'approve_for_session';
-          writeJson({
+          void sendRecord({
             jsonrpc: '2.0',
             id: message.id,
             result: {
@@ -239,14 +264,14 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
                 optionId,
               },
             },
-          });
+          }).catch(() => {});
           return;
         }
-        writeJson({
+        void sendRecord({
           jsonrpc: '2.0',
           id: message.id,
           error: { code: -32601, message: `method not found: ${message.method ?? 'unknown'}` },
-        });
+        }).catch(() => {});
       };
 
       const emitToolUse = (callId: string, tool: string, input: Record<string, unknown> | undefined) => {
@@ -322,13 +347,22 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         emitter.emit({ type: 'tool_result', callId, output });
       };
 
-      const handleNotification = (message: JsonRpcMessage) => {
+      const handleNotification = (message: AcpIncomingEnvelope) => {
         const method = message.method ?? '';
         if (method !== 'session/update' && method !== 'session/notification') return;
         if (!isRecord(message.params)) return;
         const update = normalizeAcpUpdate(message.params.update);
-        if (!update.type) return;
         if (options.gateNotificationsUntilPrompt && !promptStarted) return;
+        if (!update.type) {
+          // Vendor extensions and newer protocol kinds must not crash the
+          // turn; log them so they stay observable instead of vanishing.
+          const rawUpdate = message.params.update;
+          const rawKind = isRecord(rawUpdate)
+            ? getString(rawUpdate.sessionUpdate) ?? getString(rawUpdate.type) ?? Object.keys(rawUpdate)[0] ?? ''
+            : '';
+          emitter.emit({ type: 'log', level: 'debug', message: `${options.provider} ignored session update kind: ${rawKind}` });
+          return;
+        }
         if (update.type === 'agent_message_chunk') {
           const text = textFromContent(update.data);
           if (text) {
@@ -368,16 +402,8 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
       };
 
       child.stdout.setEncoding('utf8');
-      const rl = readline.createInterface({ input: child.stdout });
-      rl.on('line', (line) => {
-        if (!line.trim()) return;
-        let message: JsonRpcMessage;
-        try {
-          message = JSON.parse(line) as JsonRpcMessage;
-        } catch {
-          emitter.emit({ type: 'log', level: 'debug', message: line });
-          return;
-        }
+      const handleRecord = (record: unknown) => {
+        const message = (isRecord(record) ? record : {}) as AcpIncomingEnvelope;
 
         if (message.id !== undefined && message.method && message.result === undefined && message.error === undefined) {
           handleAgentRequest(message);
@@ -397,6 +423,59 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         }
 
         if (message.method) handleNotification(message);
+      };
+
+      const handleRejectedRecord = (rejected: AcpRejectedRecord): void => {
+        if (rejected.kind === 'invalid-json') {
+          emitter.emit({ type: 'log', level: 'debug', message: rejected.line.slice(0, ACP_DEBUG_LOG_LINE_MAX) });
+          return;
+        }
+        const classified = classifyAcpRecordPrefix(rejected.prefix);
+        if (classified.kind === 'agent-request') {
+          emitter.emit({
+            type: 'log',
+            level: 'debug',
+            message: `${options.provider} dropped an oversized ${classified.method} request (${rejected.observedBytes} bytes > ${rejected.maxLineBytes})`,
+          });
+          void sendRecord({
+            jsonrpc: '2.0',
+            id: classified.id,
+            error: { code: -32600, message: `request frame exceeds ${rejected.maxLineBytes} bytes` },
+          }).catch(() => {});
+          return;
+        }
+        if (classified.kind === 'response') {
+          const pendingRequest = pending.get(classified.id);
+          if (pendingRequest) {
+            // The full frame is gone; settle this call now instead of letting
+            // it hang until the turn timeout.
+            pending.delete(classified.id);
+            pendingRequest.reject(new Error(`${pendingRequest.method} response frame exceeded ${rejected.maxLineBytes} bytes (${rejected.observedBytes} bytes received)`));
+          } else {
+            emitter.emit({
+              type: 'log',
+              level: 'debug',
+              message: `${options.provider} dropped an oversized response for unknown request id ${classified.id}`,
+            });
+          }
+          return;
+        }
+        if (classified.kind === 'response-unknown') {
+          // A response we cannot bind to a pending call would leave that call
+          // hanging until the turn timeout; fail the transport instead.
+          failTransport(`${options.provider} sent an oversized response frame that could not be bound to a request (${rejected.observedBytes} bytes)`);
+          return;
+        }
+        emitter.emit({
+          type: 'log',
+          level: 'debug',
+          message: `${options.provider} dropped an oversized frame (${rejected.observedBytes} bytes > ${rejected.maxLineBytes})`,
+        });
+      };
+
+      const framer = createBoundedNdjsonFramer(handleRecord, handleRejectedRecord, { maxLineBytes });
+      child.stdout.on('data', (chunk: string) => {
+        framer.feed(chunk);
       });
 
       child.stderr.setEncoding('utf8');
@@ -535,6 +614,7 @@ export function createAcpBackend(options: AcpBackendOptions): LlmBackend {
         } catch {
           // Best effort.
         }
+        writeQueue.close(new Error(`${options.provider} process closed`));
         await shutdownChildProcess(child, childExit, {
           terminate: finalStatus !== 'completed',
           graceMs: finalStatus === 'completed' ? 2_000 : 250,
