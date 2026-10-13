@@ -6,6 +6,7 @@ var DocumentConverter = require("./document-to-html").DocumentConverter;
 var convertElementToRawText = require("./raw-text").convertElementToRawText;
 var readStyle = require("./style-reader").readStyle;
 var readOptions = require("./options-reader").readOptions;
+var promises = require("./promises");
 var unzip = require("./unzip");
 var Result = require("./results").Result;
 
@@ -32,10 +33,11 @@ function convertToMarkdown(input, options) {
 function convert(input, options) {
     options = readOptions(options);
 
-    return unzip.openZip(input)
-        .tap(function(docxFile) {
+    var result = unzip.openZip(input)
+        .then(function(docxFile) {
             return docxStyleMap.readStyleMap(docxFile).then(function(styleMap) {
                 options.embeddedStyleMap = styleMap;
+                return docxFile;
             });
         })
         .then(function(docxFile) {
@@ -47,11 +49,15 @@ function convert(input, options) {
                     return convertDocumentToHtml(documentResult, options);
                 });
         });
+
+    return promises.toExternalPromise(result);
 }
 
 function readEmbeddedStyleMap(input) {
-    return unzip.openZip(input)
+    var result = unzip.openZip(input)
         .then(docxStyleMap.readStyleMap);
+
+    return promises.toExternalPromise(result);
 }
 
 function convertDocumentToHtml(documentResult, options) {
@@ -79,17 +85,22 @@ function parseStyleMap(styleMap) {
 
 
 function extractRawText(input) {
-    return unzip.openZip(input)
+    var result = unzip.openZip(input)
         .then(docxReader.read)
         .then(function(documentResult) {
             return documentResult.map(convertElementToRawText);
         });
+
+    return promises.toExternalPromise(result);
 }
 
 function embedStyleMap(input, styleMap) {
-    return unzip.openZip(input)
-        .tap(function(docxFile) {
-            return docxStyleMap.writeStyleMap(docxFile, styleMap);
+    var result = unzip.openZip(input)
+        .then(function(docxFile) {
+            return docxStyleMap.writeStyleMap(docxFile, styleMap)
+                .then(function() {
+                    return docxFile;
+                });
         })
         .then(function(docxFile) {
             return docxFile.toArrayBuffer();
@@ -104,6 +115,8 @@ function embedStyleMap(input, styleMap) {
                 }
             };
         });
+
+    return promises.toExternalPromise(result);
 }
 
 exports.styleMapping = function() {
