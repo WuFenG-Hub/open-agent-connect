@@ -110,7 +110,7 @@
   "devDependencies": {
     "@openagentinternet/agent-browser-test-harness": "0.7.0",
     "@types/crypto-js": "^4.2.2",
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.6.5",
     "@types/turndown": "^5.0.6",
     "playwright": "^1.60.0",
     "typescript": "^5.7.3"
