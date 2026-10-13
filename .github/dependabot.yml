@@ -7,6 +7,23 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    # Ride minor/patch updates together so Dependabot opens at most one PR per
+    # cycle for them.
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Major upgrades are deferred to deliberate migrations (tracking issue #26).
+    # Lift the matching entry when starting each migration so Dependabot can
+    # refile and verify afterwards.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "bitcoinjs-lib"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@scure/bip39"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
