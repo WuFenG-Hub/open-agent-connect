@@ -6805,6 +6805,28 @@ async function serveCliDaemonProcess(context) {
             });
             if (hostText !== null)
                 return hostText;
+            // Grok Bot-bound profiles delegate the same turn through the
+            // assistant's routine webhook (llm-task channel), like surf/dream/
+            // memory/schedule. Returns null without a webhook or on any failure,
+            // so the local-runtime chain below runs unchanged. The engine tick is
+            // single-threaded, so the wait defaults to 3 minutes (the channel
+            // default of 10 minutes would stall every other task meanwhile); an
+            // explicit OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS still wins.
+            const grokBotText = await (0, grokBotLlmChannel_1.createGrokBotWebhookCompletion)({
+                homeDir: turn.profile.homeDir,
+                ...(Number(process.env[grokBotLlmChannel_1.GROK_BOT_LLM_TASK_TIMEOUT_ENV]) > 0 ? {} : { timeoutMs: 180_000 }),
+                logWarning: (scope, message) => {
+                    console.warn(`${scope} ${message}`);
+                    groupTaskEngineLog(`${scope} ${message}`);
+                },
+            })({
+                botSlug: turn.profile.slug,
+                system: turn.systemPrompt,
+                user: turn.prompt,
+                ...(turn.role === 'chair' ? { maxTokens: 8192 } : {}),
+            });
+            if (grokBotText !== null)
+                return grokBotText;
             const runtimeResolver = (0, llmRuntimeResolver_1.createLlmRuntimeResolver)({
                 runtimeStore: (0, llmRuntimeStore_1.createLlmRuntimeStore)(profilePaths),
                 bindingStore: (0, llmBindingStore_1.createLlmBindingStore)(profilePaths),

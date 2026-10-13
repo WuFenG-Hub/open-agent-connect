@@ -130,6 +130,15 @@ slow hosts with `OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS`; a network-level POST
 failure is retried once, an HTTP rejection is final. The task body contract
 the assistant must follow is documented in the `metabot-grok-bot` skill.
 
+OpenTeam group-task turns (chair greeting, assignment, wrap-up, replies to
+@mentions, worker replies) use the same channel, after the DSH pair and before
+the local runtime chain. Because the group-task engine tick is single-threaded,
+these turns wait 3 minutes by default instead of 10; setting
+`OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS` overrides that. A turn that times out or is
+rejected falls through to the local runtime chain; when that is also
+unavailable, chair turns defer with the engine's existing chair-outage backoff
+and worker turns follow the engine's existing retry rules.
+
 When no LLM channel is usable at all, a surf run for a Grok Bot-bound profile
 no longer dies with `LLM_RUNTIME_UNAVAILABLE`: the deterministic half of the
 pipeline still runs — fetched pins are filed into the knowledge base raw — and

@@ -42,7 +42,7 @@ import {
   unbindGrokBotAssistant,
 } from '../core/host/grokBotBinding';
 import { deliverGrokBotPrivateChat, type GrokBotWebhookDeliveryOutcome } from '../core/host/grokBotWebhook';
-import { createGrokBotWebhookCompletion } from '../core/host/grokBotLlmChannel';
+import { createGrokBotWebhookCompletion, GROK_BOT_LLM_TASK_TIMEOUT_ENV } from '../core/host/grokBotLlmChannel';
 import { runSurfNoLlmKbIngest } from '../core/surf/noLlmIngest';
 import { uploadLocalFileToChain } from '../core/files/uploadFile';
 import { resolveTwinHomeDir } from '../core/bot/twinRole';
@@ -7820,6 +7820,27 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         ...(turn.role === 'chair' ? { maxTokens: 8192 } : {}),
       });
       if (hostText !== null) return hostText;
+      // Grok Bot-bound profiles delegate the same turn through the
+      // assistant's routine webhook (llm-task channel), like surf/dream/
+      // memory/schedule. Returns null without a webhook or on any failure,
+      // so the local-runtime chain below runs unchanged. The engine tick is
+      // single-threaded, so the wait defaults to 3 minutes (the channel
+      // default of 10 minutes would stall every other task meanwhile); an
+      // explicit OAC_GROK_BOT_LLM_TASK_TIMEOUT_MS still wins.
+      const grokBotText = await createGrokBotWebhookCompletion({
+        homeDir: turn.profile.homeDir,
+        ...(Number(process.env[GROK_BOT_LLM_TASK_TIMEOUT_ENV]) > 0 ? {} : { timeoutMs: 180_000 }),
+        logWarning: (scope, message) => {
+          console.warn(`${scope} ${message}`);
+          groupTaskEngineLog(`${scope} ${message}`);
+        },
+      })({
+        botSlug: turn.profile.slug,
+        system: turn.systemPrompt,
+        user: turn.prompt,
+        ...(turn.role === 'chair' ? { maxTokens: 8192 } : {}),
+      });
+      if (grokBotText !== null) return grokBotText;
       const runtimeResolver = createLlmRuntimeResolver({
         runtimeStore: createLlmRuntimeStore(profilePaths),
         bindingStore: createLlmBindingStore(profilePaths),
