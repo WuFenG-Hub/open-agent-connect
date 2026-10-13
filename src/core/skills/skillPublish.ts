@@ -156,17 +156,24 @@ export async function resolveSkillPackageRoot(skillDir: string): Promise<{ packa
   );
 }
 
-/** The canonical pin payload; only non-empty optional fields ride along. */
+/**
+ * The canonical pin payload; only non-empty optional fields ride along. The
+ * `sha256` binds the advertised archive content to the pin: installers refuse
+ * a download whose digest differs (pins published before the field existed
+ * install with a warning).
+ */
 export function buildSkillPinPayload(input: {
   name: string;
   version: string;
   description?: string;
   skillFileUri: string;
+  sha256: string;
 }): Record<string, string> {
   const payload: Record<string, string> = {
     name: input.name,
     version: input.version,
     'skill-file': input.skillFileUri,
+    sha256: input.sha256,
   };
   const description = normalizeText(input.description);
   if (description) payload.description = description;
@@ -231,7 +238,7 @@ async function buildPlan(input: SkillPublishInput, makeTempDir: () => Promise<st
       description,
       network: normalizeText(input.network).toLowerCase() || 'mvc',
       archive: { bytes: archive.bytes, sha256: archive.sha256, fileCount: archive.entries.length },
-      payload: buildSkillPinPayload({ name, version, description, skillFileUri: PREVIEW_PACKAGE_URI }),
+      payload: buildSkillPinPayload({ name, version, description, skillFileUri: PREVIEW_PACKAGE_URI, sha256: archive.sha256 }),
       warnings,
     },
     archivePath,
@@ -300,7 +307,7 @@ export async function publishSkill(
           `Skill package upload returned no metafile URI (pinId: ${uploadedPinId || '(none)'}).`,
         );
       }
-      payload = buildSkillPinPayload({ name: plan.name, version: plan.version, description: plan.description, skillFileUri });
+      payload = buildSkillPinPayload({ name: plan.name, version: plan.version, description: plan.description, skillFileUri, sha256: plan.archive.sha256 });
       chainWrite = await deps.writeChain({
         operation: 'create',
         path: SKILL_PROTOCOL_PATH,
