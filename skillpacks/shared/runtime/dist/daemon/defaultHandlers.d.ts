@@ -30,6 +30,11 @@ export declare function resolveServiceOrderPaymentMetadata(currency: unknown): {
     paymentChain?: 'mvc' | 'btc';
     settlementKind?: 'native';
 };
+/** Thrown for a malformed private chat request; mapped to a structured failure. */
+export declare class InvalidChatRequestError extends Error {
+    readonly code: string;
+    constructor(code: string, message: string);
+}
 export type PeerChatPublicKeyOutcome = {
     status: 'found';
     chatPublicKey: string;

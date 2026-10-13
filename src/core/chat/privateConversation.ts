@@ -33,9 +33,101 @@ export interface ChatViewerMessage {
   toUserInfo?: ChatViewerUserInfo | null;
   userInfo?: ChatViewerUserInfo | null;
   replyPin?: string;
-  replyInfo?: Record<string, unknown> | null;
+  replyInfo?: ChatReplyInfo | null;
   mention?: Array<unknown>;
   chain?: string;
+}
+
+/**
+ * Resolved context for a quoted message (the message this one replies to).
+ * `content` is resolved from the same conversation's already-fetched message
+ * set, so quoting never costs an extra network round trip. A quote whose
+ * target is not in the current window is reported with `unresolved: true`
+ * and an empty `content` rather than being silently dropped — the UI can
+ * then show "quoted message not loaded" instead of rendering nothing.
+ */
+export interface ChatReplyInfo {
+  /** pinId of the quoted message (the value carried on the wire). */
+  pinId: string;
+  /** Quoted body, already truncated to QUOTE_CONTENT_MAX_LENGTH when needed. */
+  content: string;
+  /** True when the quoted body was cut at QUOTE_CONTENT_MAX_LENGTH. */
+  truncated: boolean;
+  /** True when the quoted message is not present in the fetched window. */
+  unresolved: boolean;
+  senderLabel: string;
+  timestamp: number;
+}
+
+/**
+ * Quoted bodies render inline in a bubble, so a multi-thousand-character quote
+ * would blow up the thread layout and the transcript export. The cut is
+ * explicit (`truncated: true` + an ellipsis) rather than silent.
+ */
+export const QUOTE_CONTENT_MAX_LENGTH = 1000;
+
+/** A quote target is a MetaWeb pin id: 64 lowercase hex characters + `i0`. */
+const QUOTE_PIN_PATTERN = /^[0-9a-f]{64}i0$/;
+
+export function isValidQuotePinId(value: unknown): boolean {
+  return QUOTE_PIN_PATTERN.test(normalizeText(value));
+}
+
+function readUserInfoLabel(info: unknown): string {
+  if (!info || typeof info !== 'object') return '';
+  const record = info as Record<string, unknown>;
+  return normalizeText(record.name)
+    || normalizeText(record.displayName)
+    || normalizeText(record.nickName);
+}
+
+/**
+ * Build the reply context for one message from the conversation's own rows.
+ * Returns null when the message carries no quote.
+ */
+export function buildReplyInfo(input: {
+  replyPin: string;
+  byPinId: Map<string, ChatViewerMessage>;
+}): ChatReplyInfo | null {
+  const pinId = normalizeText(input.replyPin);
+  if (!pinId) return null;
+  const target = input.byPinId.get(pinId) ?? null;
+  if (!target) {
+    return {
+      pinId,
+      content: '',
+      truncated: false,
+      unresolved: true,
+      senderLabel: '',
+      timestamp: 0,
+    };
+  }
+  const full = normalizeText(target.content);
+  const truncated = full.length > QUOTE_CONTENT_MAX_LENGTH;
+  const sender = readUserInfoLabel(target.fromUserInfo)
+    || readUserInfoLabel(target.toUserInfo)
+    || normalizeText(target.fromGlobalMetaId)
+    || normalizeText(target.toGlobalMetaId);
+  return {
+    pinId,
+    content: truncated ? `${full.slice(0, QUOTE_CONTENT_MAX_LENGTH)}…` : full,
+    truncated,
+    unresolved: false,
+    senderLabel: sender,
+    timestamp: Number(target.timestamp || 0),
+  };
+}
+
+/** Index messages by every id a quote may reference; first occurrence wins. */
+export function indexMessagesByPinId(messages: ChatViewerMessage[]): Map<string, ChatViewerMessage> {
+  const byPinId = new Map<string, ChatViewerMessage>();
+  for (const message of messages) {
+    for (const candidate of [message.pinId, message.id]) {
+      const key = normalizeText(candidate);
+      if (key && !byPinId.has(key)) byPinId.set(key, message);
+    }
+  }
+  return byPinId;
 }
 
 export interface FetchPrivateHistoryInput {
@@ -677,10 +769,28 @@ function normalizeConversationRow(input: {
     ...(toUserInfo ? { toUserInfo } : {}),
     ...(userInfo ? { userInfo } : {}),
     ...(replyPin ? { replyPin } : {}),
+    // Filled by attachReplyInfo() once the whole conversation window is known;
+    // a quote can only be resolved against messages fetched in the same pass.
     replyInfo: null,
     ...(Array.isArray(row.mention) ? { mention: row.mention.slice() } : {}),
     ...(chain ? { chain } : {}),
   };
+}
+
+/**
+ * Resolve every message's `replyInfo` against the full fetched window.
+ *
+ * Runs as a second pass because a quote may target a message that appears
+ * later in the window than the quoting message itself (or earlier, after a
+ * reverse-ordered fetch) — resolving inline would make the result depend on
+ * row order. Messages carrying no quote are left untouched.
+ */
+function attachReplyInfo(messages: ChatViewerMessage[]): ChatViewerMessage[] {
+  const byPinId = indexMessagesByPinId(messages);
+  return messages.map((message) => {
+    if (!message.replyPin) return message;
+    return { ...message, replyInfo: buildReplyInfo({ replyPin: message.replyPin, byPinId }) };
+  });
 }
 
 function sortMessages(messages: ChatViewerMessage[]): ChatViewerMessage[] {
@@ -725,14 +835,14 @@ export async function buildPrivateConversationResponse(
     limit,
   });
   const nowMs = input.now ? input.now() : Date.now();
-  const messages = sortMessages(rows.map((row) => normalizeConversationRow({
+  const messages = attachReplyInfo(sortMessages(rows.map((row) => normalizeConversationRow({
     row,
     selfGlobalMetaId,
     peerGlobalMetaId,
     localPrivateKeyHex,
     peerChatPublicKey,
     nowMs,
-  })));
+  }))));
   const nextPollAfterIndex = messages.reduce((max, message) => {
     return Math.max(max, Number(message.index || 0));
   }, afterIndex ?? 0);

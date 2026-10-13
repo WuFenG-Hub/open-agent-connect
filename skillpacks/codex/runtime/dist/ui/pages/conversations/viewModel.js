@@ -262,11 +262,16 @@ function buildMessage(row) {
     const contentType = normalizeText(record.contentType) || 'text/plain';
     const txid = resolveMessageTxid(record);
     const rawContent = normalizeText(record.content) || normalizeText(record.text) || normalizeText(record.body);
+    const messageId = normalizeText(record.messageId)
+        || normalizeText(record.id)
+        || normalizeText(record.pinId)
+        || normalizeText(record.messagePinId);
+    // Quoting must target the on-chain pin id. A row that only has a local id
+    // is not quotable — quoting it would write a replyPin that resolves to
+    // nothing on chain — so quotePinId stays empty for those rows.
+    const quotePinId = normalizeText(record.pinId) || normalizeText(record.messagePinId);
     return {
-        messageId: normalizeText(record.messageId)
-            || normalizeText(record.id)
-            || normalizeText(record.pinId)
-            || normalizeText(record.messagePinId),
+        messageId,
         direction,
         directionLabel: direction === 'outgoing' || direction === 'outbound' ? 'Bot' : 'Peer',
         kindLabel: normalizeKindLabel(record.kind || record.protocolTag),
@@ -284,6 +289,23 @@ function buildMessage(row) {
         hostStatus: record.hostStatus === true,
         deliveryStatus: normalizeText(record.deliveryStatus),
         isAttachment: /^metafile:\/\//iu.test(normalizeText(record.content)),
+        quotePinId,
+        replyInfo: buildReplyInfoViewModel(record.replyInfo),
+    };
+}
+/** Normalize the core-layer ChatReplyInfo into the view shape. */
+function buildReplyInfoViewModel(raw) {
+    const record = readObject(raw);
+    const pinId = normalizeText(record.pinId);
+    if (!pinId)
+        return null;
+    return {
+        pinId,
+        content: normalizeText(record.content),
+        truncated: record.truncated === true,
+        unresolved: record.unresolved === true,
+        senderLabel: normalizeText(record.senderLabel),
+        timestampLabel: formatTimestamp(normalizeTimestampMs(record.timestamp)),
     };
 }
 function buildConversationsPageViewModel(input = {}) {
@@ -384,6 +406,7 @@ function buildConversationsPageViewModelRuntimeSource() {
         buildSyntheticConversationSummary,
         buildConversationSummary,
         buildMessage,
+        buildReplyInfoViewModel,
         buildConversationsPageViewModel,
     ].map((fn) => fn.toString()).join('\n');
 }

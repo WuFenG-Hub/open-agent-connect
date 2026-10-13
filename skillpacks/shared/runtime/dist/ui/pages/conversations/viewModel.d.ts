@@ -40,6 +40,23 @@ export interface ConversationMessageViewModel {
     hostStatus: boolean;
     deliveryStatus: string;
     isAttachment: boolean;
+    /**
+     * The pin id of the chain pin this message was built from. Quoting targets
+     * this value, so it must be the on-chain pin id — never a synthesized local
+     * row id, which would produce a quote pointer that resolves to nothing.
+     */
+    quotePinId: string;
+    /** Resolved quote context, or null when this message quotes nothing. */
+    replyInfo: ConversationReplyInfoViewModel | null;
+}
+/** View-ready shape of a quoted message; mirrors core ChatReplyInfo. */
+export interface ConversationReplyInfoViewModel {
+    pinId: string;
+    content: string;
+    truncated: boolean;
+    unresolved: boolean;
+    senderLabel: string;
+    timestampLabel: string;
 }
 export interface ConversationsEmptyStateViewModel {
     title: string;

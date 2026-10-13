@@ -884,6 +884,12 @@ export declare const DICTIONARIES: {
         readonly 'conversations.deliveryFailed': "Failed to send";
         readonly 'conversations.jumpToLatest': "Jump to latest";
         readonly 'conversations.composerPlaceholder': "Message this Bot as your local Bot…";
+        readonly 'conversations.quoteAction': "Quote";
+        readonly 'conversations.quotingLabel': "Quoting {name}";
+        readonly 'conversations.quoteRemove': "Remove quote";
+        readonly 'conversations.quotedMessage': "Quoted message";
+        readonly 'conversations.quotedUnavailable': "Quoted message is not loaded";
+        readonly 'conversations.quotedTruncated': "(truncated)";
         readonly 'conversations.send': "Send";
         readonly 'conversations.attachFile': "Attach file";
         readonly 'conversations.downloadAttachment': "Download attachment";
@@ -2622,6 +2628,12 @@ export declare const DICTIONARIES: {
         readonly 'conversations.deliveryFailed': "发送失败";
         readonly 'conversations.jumpToLatest': "跳到最新";
         readonly 'conversations.composerPlaceholder': "以本机 Bot 身份给对方发消息…";
+        readonly 'conversations.quoteAction': "引用";
+        readonly 'conversations.quotingLabel': "正在引用 {name}";
+        readonly 'conversations.quoteRemove': "取消引用";
+        readonly 'conversations.quotedMessage': "引用的消息";
+        readonly 'conversations.quotedUnavailable': "引用的消息未加载";
+        readonly 'conversations.quotedTruncated': "（已截断）";
         readonly 'conversations.send': "发送";
         readonly 'conversations.attachFile': "附件";
         readonly 'conversations.downloadAttachment': "下载附件";

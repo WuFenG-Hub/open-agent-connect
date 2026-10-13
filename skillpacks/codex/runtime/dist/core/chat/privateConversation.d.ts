@@ -23,10 +23,47 @@ export interface ChatViewerMessage {
     toUserInfo?: ChatViewerUserInfo | null;
     userInfo?: ChatViewerUserInfo | null;
     replyPin?: string;
-    replyInfo?: Record<string, unknown> | null;
+    replyInfo?: ChatReplyInfo | null;
     mention?: Array<unknown>;
     chain?: string;
 }
+/**
+ * Resolved context for a quoted message (the message this one replies to).
+ * `content` is resolved from the same conversation's already-fetched message
+ * set, so quoting never costs an extra network round trip. A quote whose
+ * target is not in the current window is reported with `unresolved: true`
+ * and an empty `content` rather than being silently dropped — the UI can
+ * then show "quoted message not loaded" instead of rendering nothing.
+ */
+export interface ChatReplyInfo {
+    /** pinId of the quoted message (the value carried on the wire). */
+    pinId: string;
+    /** Quoted body, already truncated to QUOTE_CONTENT_MAX_LENGTH when needed. */
+    content: string;
+    /** True when the quoted body was cut at QUOTE_CONTENT_MAX_LENGTH. */
+    truncated: boolean;
+    /** True when the quoted message is not present in the fetched window. */
+    unresolved: boolean;
+    senderLabel: string;
+    timestamp: number;
+}
+/**
+ * Quoted bodies render inline in a bubble, so a multi-thousand-character quote
+ * would blow up the thread layout and the transcript export. The cut is
+ * explicit (`truncated: true` + an ellipsis) rather than silent.
+ */
+export declare const QUOTE_CONTENT_MAX_LENGTH = 1000;
+export declare function isValidQuotePinId(value: unknown): boolean;
+/**
+ * Build the reply context for one message from the conversation's own rows.
+ * Returns null when the message carries no quote.
+ */
+export declare function buildReplyInfo(input: {
+    replyPin: string;
+    byPinId: Map<string, ChatViewerMessage>;
+}): ChatReplyInfo | null;
+/** Index messages by every id a quote may reference; first occurrence wins. */
+export declare function indexMessagesByPinId(messages: ChatViewerMessage[]): Map<string, ChatViewerMessage>;
 export interface FetchPrivateHistoryInput {
     selfGlobalMetaId: string;
     peerGlobalMetaId: string;

@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.InvalidChatRequestError = void 0;
 exports.resolveServiceOrderPaymentMetadata = resolveServiceOrderPaymentMetadata;
 exports.lookupPeerChatPublicKey = lookupPeerChatPublicKey;
 exports.fetchPeerChatPublicKey = fetchPeerChatPublicKey;
@@ -2019,9 +2020,54 @@ function readPrivateChatRequest(rawInput) {
     return {
         to: normalizeText(rawInput.to),
         content,
-        replyPin: normalizeText(rawInput.replyPin),
+        // Quote target. A malformed id must fail the request loudly rather than
+        // fall through as a normal message: a silently dropped quote would post
+        // the reply to the chain looking like an unquoted message, which cannot
+        // be corrected after broadcast.
+        replyPin: readQuotePinId(rawInput),
         peerChatPublicKey: normalizeText(rawInput.peerChatPublicKey),
     };
+}
+/**
+ * Read the optional quote target from a private chat request.
+ * Accepts either `replyPin` or `replyPinId` (the UI and the core layers use
+ * different spellings) and returns '' when absent. Throws on a non-empty
+ * value that is not a well-formed MetaWeb pin id.
+ */
+function readQuotePinId(rawInput) {
+    const candidate = normalizeText(rawInput.replyPin) || normalizeText(rawInput.replyPinId);
+    if (!candidate)
+        return '';
+    if (!(0, privateConversation_1.isValidQuotePinId)(candidate)) {
+        throw new InvalidChatRequestError('invalid_quote_target', 'Quote target must be a 64-character lowercase hex pin id followed by "i0".');
+    }
+    return candidate;
+}
+/** Thrown for a malformed private chat request; mapped to a structured failure. */
+class InvalidChatRequestError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.name = 'InvalidChatRequestError';
+        this.code = code;
+    }
+}
+exports.InvalidChatRequestError = InvalidChatRequestError;
+/**
+ * Validate-or-fail wrapper around readPrivateChatRequest. A bad quote target
+ * must surface as a command failure before anything is broadcast, because a
+ * chain write cannot be taken back.
+ */
+function readPrivateChatRequestSafe(rawInput) {
+    try {
+        return readPrivateChatRequest(rawInput);
+    }
+    catch (error) {
+        if (error instanceof InvalidChatRequestError) {
+            return { failure: (0, commandResult_1.commandFailed)(error.code, error.message) };
+        }
+        throw error;
+    }
 }
 function readPrivateConversationRequest(rawInput) {
     return {
@@ -14995,7 +15041,10 @@ function createDefaultMetabotDaemonHandlers(input) {
                 if (!state.identity) {
                     return (0, commandResult_1.commandFailed)('identity_missing', 'Create a local MetaBot identity before sending private chat.');
                 }
-                const request = readPrivateChatRequest(rawInput);
+                const request = readPrivateChatRequestSafe(rawInput);
+                if ('failure' in request) {
+                    return request.failure;
+                }
                 if (!request.to || !request.content) {
                     return (0, commandResult_1.commandFailed)('invalid_chat_request', 'Private chat request must include to and content.');
                 }

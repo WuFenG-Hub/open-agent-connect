@@ -221,6 +221,13 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
     pendingGuidance: null,
     sendDraft: '',
     sending: false,
+    // Quote-reply composer state. Quoting is single-target: selecting a new
+    // message replaces the pending quote, matching how the on-chain payload
+    // carries exactly one replyPin per message.
+    pendingQuote: null,
+    // Anchor of the message the composer is replying to, so the thread can
+    // highlight it and scroll it into view.
+    highlightedQuotePin: '',
     // Live reply-turn activity per peer (conversation-reply-state SSE events).
     replyingPeers: {},
     // Live unread counts per peer for the selected local Bot (localStorage).
@@ -640,11 +647,63 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
     jumpLatestButton.title = jumpLatestButton.textContent;
   };
   refreshJumpLatestLabel();
+  /**
+   * Render the composer's pending-quote strip directly above the input, or
+   * remove it when nothing is quoted. The strip is rebuilt on every render so
+   * it cannot drift out of sync with state.pendingQuote.
+   */
+  const renderPendingQuote = (hasTarget) => {
+    if (!elements.sendForm) return;
+    let strip = elements.sendForm.querySelector('[data-pending-quote]');
+    if (!hasTarget || !state.pendingQuote) {
+      if (strip && strip.parentNode) strip.parentNode.removeChild(strip);
+      return;
+    }
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.setAttribute('data-pending-quote', '1');
+      strip.className = 'pending-quote';
+      const head = document.createElement('div');
+      head.className = 'pending-quote-head';
+      const title = document.createElement('span');
+      title.className = 'pending-quote-title';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pending-quote-remove';
+      remove.setAttribute('data-pending-quote-remove', '1');
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        clearPendingQuote();
+      });
+      const body = document.createElement('div');
+      body.className = 'pending-quote-body';
+      body.setAttribute('data-pending-quote-body', '1');
+      head.appendChild(title);
+      head.appendChild(remove);
+      strip.appendChild(head);
+      strip.appendChild(body);
+      elements.sendForm.insertBefore(strip, elements.sendForm.firstChild);
+    }
+    const title = strip.querySelector('.pending-quote-title');
+    const body = strip.querySelector('[data-pending-quote-body]');
+    const remove = strip.querySelector('[data-pending-quote-remove]');
+    if (title) {
+      title.textContent = uiText('conversations.quotingLabel', 'Quoting {name}')
+        .split('{name}').join(state.pendingQuote.senderLabel || uiText('conversations.quotedMessage', 'Quoted message'));
+    }
+    if (body) body.textContent = state.pendingQuote.excerpt || '';
+    if (remove) {
+      remove.textContent = uiText('conversations.quoteRemove', 'Remove quote');
+      remove.title = remove.textContent;
+    }
+  };
+
   const renderGuidanceComposer = (model) => {
     const selected = model.selectedConversation;
     const hasTarget = Boolean(selected && hasGuidanceTarget());
     if (elements.guidance) elements.guidance.hidden = !hasTarget;
     if (elements.sendForm) elements.sendForm.hidden = !hasTarget;
+    renderPendingQuote(hasTarget);
     if (elements.sendInput) {
       elements.sendInput.value = state.sendDraft;
       elements.sendInput.disabled = state.sending;
@@ -913,14 +972,53 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
       deliveryHtml = '<span class="msg-delivery msg-delivery-failed">' + escapeHtml(uiText('conversations.deliveryFailed', 'Failed to send')) + '</span>';
     }
     const metaHtml = isLocal ? txidHtml + timeHtml + deliveryHtml : timeHtml + txidHtml;
-    return '<article class="msg-row ' + (isLocal ? 'msg-local' : 'msg-peer') + '" data-message-direction="' + (isLocal ? 'local' : 'peer') + '">' +
+    const quoteHtml = renderQuoteBlock(message, selected, model);
+    const quoteTargetHtml = isQuoteTarget(message)
+      ? ' msg-quote-target'
+      : '';
+    const quotable = Boolean(message.quotePinId) && !message.hostStatus;
+    return '<article class="msg-row ' + (isLocal ? 'msg-local' : 'msg-peer') + quoteTargetHtml + '"'
+      + ' data-message-direction="' + (isLocal ? 'local' : 'peer') + '"'
+      + (message.quotePinId ? ' data-message-pin="' + escapeHtml(message.quotePinId) + '"' : '')
+      + (quotable ? ' data-quotable="1"' : '') + '>' +
       avatarHtml +
       '<div class="msg-body">' +
         '<div class="msg-name">' + escapeHtml(senderName) + '</div>' +
-        '<div class="msg-bubble ' + (isLocal ? 'bubble-local' : 'bubble-peer') + '">' + contentHtml + '</div>' +
+        '<div class="msg-bubble ' + (isLocal ? 'bubble-local' : 'bubble-peer') + '">' + quoteHtml + contentHtml + '</div>' +
         '<div class="msg-meta ' + (isLocal ? 'msg-meta-local' : 'msg-meta-peer') + '">' + metaHtml + '</div>' +
       '</div>' +
     '</article>';
+  };
+
+  /** True when this message is the one the composer is currently quoting. */
+  const isQuoteTarget = (message) => Boolean(
+    state.highlightedQuotePin && message.quotePinId === state.highlightedQuotePin
+  );
+
+  /**
+   * Render the quoted context shown above a message body. A quote whose target
+   * is outside the loaded window still renders (marked unresolved) so the
+   * reader learns the message replies to something specific rather than seeing
+   * an unexplained plain reply.
+   */
+  const renderQuoteBlock = (message, selected, model) => {
+    const info = message.replyInfo;
+    if (!info) return '';
+    const label = uiText('conversations.quotedMessage', 'Quoted message');
+    const sender = info.senderLabel || label;
+    const body = info.unresolved
+      ? uiText('conversations.quotedUnavailable', 'Quoted message is not loaded')
+      : (info.content || '');
+    const truncatedNote = info.truncated
+      ? '<span class="msg-quote-truncated">' + escapeHtml(uiText('conversations.quotedTruncated', '(truncated)')) + '</span>'
+      : '';
+    return '<div class="msg-quote" data-message-quote="' + escapeHtml(info.pinId) + '">'
+      + '<div class="msg-quote-head">'
+      + '<span class="msg-quote-label">' + escapeHtml(sender) + '</span>'
+      + truncatedNote
+      + '</div>'
+      + '<div class="msg-quote-body">' + escapeHtml(body) + '</div>'
+      + '</div>';
   };
   const renderDetail = (model) => {
     const selected = model.selectedConversation;
@@ -1209,6 +1307,8 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
     if (!hasGuidanceTarget() || !state.sendDraft.trim() || state.sending) return;
     const targetLocal = state.selectedLocalGlobalMetaId;
     const targetPeer = state.selectedPeerGlobalMetaId;
+    // Snapshot the quote so a re-render mid-send cannot change what was sent.
+    const pendingQuote = state.pendingQuote;
     state.sending = true;
     render();
     try {
@@ -1219,9 +1319,13 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
           from: targetLocal,
           to: targetPeer,
           content: state.sendDraft.trim(),
+          ...(pendingQuote && pendingQuote.pinId ? { replyPin: pendingQuote.pinId } : {}),
         }),
       });
       state.sendDraft = '';
+      // The quote is consumed by the send; a new one must be chosen explicitly.
+      state.pendingQuote = null;
+      state.highlightedQuotePin = '';
       if (state.selectedLocalGlobalMetaId === targetLocal && state.selectedPeerGlobalMetaId === targetPeer) {
         await loadConversations({ stickToBottom: true });
       }
@@ -1387,6 +1491,113 @@ function buildConversationsPageDefinition(i18n = (0, i18n_1.createI18nContext)()
   window.addEventListener('oac:i18n-changed', () => {
     refreshJumpLatestLabel();
     render();
+  });
+
+  // ── Quote reply ───────────────────────────────────────────────────────────
+  // Quoting targets a chain pin id and is single-valued: picking a new message
+  // replaces the pending quote. The quote is only transmitted when the user
+  // sends, so abandoning the composer leaves no trace.
+  const quoteLabelFor = (message) => {
+    const sender = message.senderLabel || uiText('conversations.quotedMessage', 'Quoted message');
+    const body = (message.content || '').replace(/\s+/gu, ' ').trim();
+    return { sender, body };
+  };
+
+  /** Set the pending quote from a message view model (no-op when unquotable). */
+  const setPendingQuote = (message) => {
+    if (!message || !message.quotePinId) return false;
+    const label = quoteLabelFor(message);
+    state.pendingQuote = {
+      pinId: message.quotePinId,
+      senderLabel: label.sender,
+      excerpt: truncateQuoteExcerpt(label.body),
+    };
+    render();
+    if (elements.sendInput && typeof elements.sendInput.focus === 'function') {
+      elements.sendInput.focus();
+    }
+    return true;
+  };
+
+  const clearPendingQuote = () => {
+    if (!state.pendingQuote) return;
+    state.pendingQuote = null;
+    state.highlightedQuotePin = '';
+    render();
+  };
+
+  /** Quote excerpts shown in the composer: long bodies are cut, never silent. */
+  const QUOTE_EXCERPT_MAX = 1000;
+  const truncateQuoteExcerpt = (text) => (text.length > QUOTE_EXCERPT_MAX
+    ? text.slice(0, QUOTE_EXCERPT_MAX) + '…'
+    : text);
+
+  // Selecting text inside a bubble reveals a floating "Quote" action. The
+  // action sits above the composer so it never covers the selected text.
+  let quoteActionButton = null;
+  const hideQuoteAction = () => {
+    if (quoteActionButton && quoteActionButton.parentNode) {
+      quoteActionButton.parentNode.removeChild(quoteActionButton);
+    }
+    quoteActionButton = null;
+  };
+
+  const showQuoteActionForSelection = () => {
+    hideQuoteAction();
+    if (!elements.messages) return;
+    const selection = window.getSelection && window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    const text = String(selection.toString() || '').trim();
+    if (!text) return;
+    // Only quotes anchored inside a message bubble are eligible.
+    const anchorNode = selection.anchorNode;
+    const row = anchorNode && anchorNode.parentElement
+      ? anchorNode.parentElement.closest('[data-quotable="1"]')
+      : null;
+    if (!row || !elements.messages.contains(row)) return;
+    const pinId = row.getAttribute('data-message-pin') || '';
+    if (!pinId) return;
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-sm msg-quote-action';
+    button.textContent = uiText('conversations.quoteAction', 'Quote');
+    button.style.left = Math.round(rect.left + rect.width / 2) + 'px';
+    button.style.top = Math.round(rect.top - 8) + 'px';
+    button.addEventListener('mousedown', (event) => {
+      // Keep the selection alive: a plain click would collapse it before the
+      // handler ran and the quote would lose its target.
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const message = state.messages.find((entry) => entry.quotePinId === pinId) || null;
+      if (message && setPendingQuote(message)) {
+        state.highlightedQuotePin = pinId;
+      }
+      hideQuoteAction();
+      if (selection.removeAllRanges) selection.removeAllRanges();
+    });
+    document.body.appendChild(button);
+    quoteActionButton = button;
+  };
+
+  document.addEventListener('mouseup', () => {
+    // Defer so the browser has finalized the selection.
+    window.setTimeout(showQuoteActionForSelection, 0);
+  });
+  document.addEventListener('mousedown', (event) => {
+    if (quoteActionButton && event.target === quoteActionButton) return;
+    hideQuoteAction();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      hideQuoteAction();
+      clearPendingQuote();
+    }
   });
 
   // ── Group task section (DSH GroupTaskView parity) ──────────────────────────

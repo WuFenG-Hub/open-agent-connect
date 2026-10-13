@@ -1,5 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.QUOTE_CONTENT_MAX_LENGTH = void 0;
+exports.isValidQuotePinId = isValidQuotePinId;
+exports.buildReplyInfo = buildReplyInfo;
+exports.indexMessagesByPinId = indexMessagesByPinId;
 exports.normalizeConversationLimit = normalizeConversationLimit;
 exports.normalizeConversationAfterIndex = normalizeConversationAfterIndex;
 exports.extractPrivateChatPeerGlobalMetaIds = extractPrivateChatPeerGlobalMetaIds;
@@ -14,6 +18,71 @@ const DEFAULT_CONVERSATION_LIMIT = 50;
 const MAX_CONVERSATION_LIMIT = 200;
 const UNABLE_TO_DECRYPT_TEXT = '[Unable to decrypt message]';
 const UNSUPPORTED_FILE_TEXT = '[Unsupported file message]';
+/**
+ * Quoted bodies render inline in a bubble, so a multi-thousand-character quote
+ * would blow up the thread layout and the transcript export. The cut is
+ * explicit (`truncated: true` + an ellipsis) rather than silent.
+ */
+exports.QUOTE_CONTENT_MAX_LENGTH = 1000;
+/** A quote target is a MetaWeb pin id: 64 lowercase hex characters + `i0`. */
+const QUOTE_PIN_PATTERN = /^[0-9a-f]{64}i0$/;
+function isValidQuotePinId(value) {
+    return QUOTE_PIN_PATTERN.test(normalizeText(value));
+}
+function readUserInfoLabel(info) {
+    if (!info || typeof info !== 'object')
+        return '';
+    const record = info;
+    return normalizeText(record.name)
+        || normalizeText(record.displayName)
+        || normalizeText(record.nickName);
+}
+/**
+ * Build the reply context for one message from the conversation's own rows.
+ * Returns null when the message carries no quote.
+ */
+function buildReplyInfo(input) {
+    const pinId = normalizeText(input.replyPin);
+    if (!pinId)
+        return null;
+    const target = input.byPinId.get(pinId) ?? null;
+    if (!target) {
+        return {
+            pinId,
+            content: '',
+            truncated: false,
+            unresolved: true,
+            senderLabel: '',
+            timestamp: 0,
+        };
+    }
+    const full = normalizeText(target.content);
+    const truncated = full.length > exports.QUOTE_CONTENT_MAX_LENGTH;
+    const sender = readUserInfoLabel(target.fromUserInfo)
+        || readUserInfoLabel(target.toUserInfo)
+        || normalizeText(target.fromGlobalMetaId)
+        || normalizeText(target.toGlobalMetaId);
+    return {
+        pinId,
+        content: truncated ? `${full.slice(0, exports.QUOTE_CONTENT_MAX_LENGTH)}…` : full,
+        truncated,
+        unresolved: false,
+        senderLabel: sender,
+        timestamp: Number(target.timestamp || 0),
+    };
+}
+/** Index messages by every id a quote may reference; first occurrence wins. */
+function indexMessagesByPinId(messages) {
+    const byPinId = new Map();
+    for (const message of messages) {
+        for (const candidate of [message.pinId, message.id]) {
+            const key = normalizeText(candidate);
+            if (key && !byPinId.has(key))
+                byPinId.set(key, message);
+        }
+    }
+    return byPinId;
+}
 function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -468,10 +537,28 @@ function normalizeConversationRow(input) {
         ...(toUserInfo ? { toUserInfo } : {}),
         ...(userInfo ? { userInfo } : {}),
         ...(replyPin ? { replyPin } : {}),
+        // Filled by attachReplyInfo() once the whole conversation window is known;
+        // a quote can only be resolved against messages fetched in the same pass.
         replyInfo: null,
         ...(Array.isArray(row.mention) ? { mention: row.mention.slice() } : {}),
         ...(chain ? { chain } : {}),
     };
+}
+/**
+ * Resolve every message's `replyInfo` against the full fetched window.
+ *
+ * Runs as a second pass because a quote may target a message that appears
+ * later in the window than the quoting message itself (or earlier, after a
+ * reverse-ordered fetch) — resolving inline would make the result depend on
+ * row order. Messages carrying no quote are left untouched.
+ */
+function attachReplyInfo(messages) {
+    const byPinId = indexMessagesByPinId(messages);
+    return messages.map((message) => {
+        if (!message.replyPin)
+            return message;
+        return { ...message, replyInfo: buildReplyInfo({ replyPin: message.replyPin, byPinId }) };
+    });
 }
 function sortMessages(messages) {
     return messages.slice().sort((a, b) => {
@@ -512,14 +599,14 @@ async function buildPrivateConversationResponse(input) {
         limit,
     });
     const nowMs = input.now ? input.now() : Date.now();
-    const messages = sortMessages(rows.map((row) => normalizeConversationRow({
+    const messages = attachReplyInfo(sortMessages(rows.map((row) => normalizeConversationRow({
         row,
         selfGlobalMetaId,
         peerGlobalMetaId,
         localPrivateKeyHex,
         peerChatPublicKey,
         nowMs,
-    })));
+    }))));
     const nextPollAfterIndex = messages.reduce((max, message) => {
         return Math.max(max, Number(message.index || 0));
     }, afterIndex ?? 0);

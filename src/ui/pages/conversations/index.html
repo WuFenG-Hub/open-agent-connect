@@ -522,6 +522,76 @@
       }
       .msg-bubble p { margin: 0 0 6px; }
       .msg-bubble p:last-child { margin: 0; }
+      /* ── Quote reply ─────────────────────────────────────────────────── */
+      .msg-quote {
+        border-left: 3px solid var(--border2);
+        padding: 4px 8px;
+        margin: 0 0 6px;
+        border-radius: 6px;
+        background: rgba(127, 127, 127, .14);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .msg-quote-head {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin: 0 0 2px;
+      }
+      .msg-quote-label { font-weight: 600; opacity: .9; }
+      .msg-quote-truncated { opacity: .65; font-size: 11px; }
+      .msg-quote-body {
+        opacity: .85;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      /* A quoted message that the composer is replying to is outlined so the
+         reader can see exactly what the pending reply points at. */
+      .msg-quote-target .msg-bubble {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .msg-quote-action {
+        position: fixed;
+        z-index: 40;
+        transform: translate(-50%, -100%);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+      }
+      .pending-quote {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin: 0 0 6px;
+        padding: 6px 10px;
+        border-left: 3px solid var(--accent);
+        border-radius: 6px;
+        background: var(--surface2);
+        border: 1px solid var(--border2);
+      }
+      .pending-quote-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .pending-quote-title { font-size: 12px; font-weight: 600; }
+      .pending-quote-remove {
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        font-size: 11px;
+        opacity: .7;
+        color: inherit;
+        text-decoration: underline;
+      }
+      .pending-quote-remove:hover { opacity: 1; }
+      .pending-quote-body {
+        font-size: 12px;
+        opacity: .8;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .msg-bubble h1,
       .msg-bubble h2,
       .msg-bubble h3,

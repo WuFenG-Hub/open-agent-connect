@@ -42,6 +42,24 @@ export interface ConversationMessageViewModel {
   hostStatus: boolean;
   deliveryStatus: string;
   isAttachment: boolean;
+  /**
+   * The pin id of the chain pin this message was built from. Quoting targets
+   * this value, so it must be the on-chain pin id — never a synthesized local
+   * row id, which would produce a quote pointer that resolves to nothing.
+   */
+  quotePinId: string;
+  /** Resolved quote context, or null when this message quotes nothing. */
+  replyInfo: ConversationReplyInfoViewModel | null;
+}
+
+/** View-ready shape of a quoted message; mirrors core ChatReplyInfo. */
+export interface ConversationReplyInfoViewModel {
+  pinId: string;
+  content: string;
+  truncated: boolean;
+  unresolved: boolean;
+  senderLabel: string;
+  timestampLabel: string;
 }
 
 export interface ConversationsEmptyStateViewModel {
@@ -362,11 +380,16 @@ function buildMessage(row: unknown): ConversationMessageViewModel {
   const contentType = normalizeText(record.contentType) || 'text/plain';
   const txid = resolveMessageTxid(record);
   const rawContent = normalizeText(record.content) || normalizeText(record.text) || normalizeText(record.body);
+  const messageId = normalizeText(record.messageId)
+    || normalizeText(record.id)
+    || normalizeText(record.pinId)
+    || normalizeText(record.messagePinId);
+  // Quoting must target the on-chain pin id. A row that only has a local id
+  // is not quotable — quoting it would write a replyPin that resolves to
+  // nothing on chain — so quotePinId stays empty for those rows.
+  const quotePinId = normalizeText(record.pinId) || normalizeText(record.messagePinId);
   return {
-    messageId: normalizeText(record.messageId)
-      || normalizeText(record.id)
-      || normalizeText(record.pinId)
-      || normalizeText(record.messagePinId),
+    messageId,
     direction,
     directionLabel: direction === 'outgoing' || direction === 'outbound' ? 'Bot' : 'Peer',
     kindLabel: normalizeKindLabel(record.kind || record.protocolTag),
@@ -384,6 +407,23 @@ function buildMessage(row: unknown): ConversationMessageViewModel {
     hostStatus: record.hostStatus === true,
     deliveryStatus: normalizeText(record.deliveryStatus),
     isAttachment: /^metafile:\/\//iu.test(normalizeText(record.content)),
+    quotePinId,
+    replyInfo: buildReplyInfoViewModel(record.replyInfo),
+  };
+}
+
+/** Normalize the core-layer ChatReplyInfo into the view shape. */
+function buildReplyInfoViewModel(raw: unknown): ConversationReplyInfoViewModel | null {
+  const record = readObject(raw);
+  const pinId = normalizeText(record.pinId);
+  if (!pinId) return null;
+  return {
+    pinId,
+    content: normalizeText(record.content),
+    truncated: record.truncated === true,
+    unresolved: record.unresolved === true,
+    senderLabel: normalizeText(record.senderLabel),
+    timestampLabel: formatTimestamp(normalizeTimestampMs(record.timestamp)),
   };
 }
 
@@ -489,6 +529,7 @@ export function buildConversationsPageViewModelRuntimeSource(): string {
     buildSyntheticConversationSummary,
     buildConversationSummary,
     buildMessage,
+    buildReplyInfoViewModel,
     buildConversationsPageViewModel,
   ].map((fn) => fn.toString()).join('\n');
 }
