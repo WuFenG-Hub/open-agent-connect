@@ -31,6 +31,7 @@ import { runUiCommand } from './commands/ui';
 import { runConfigCommand } from './commands/config';
 import { runSkillsCommand } from './commands/skills';
 import { runHostCommand } from './commands/host';
+import { runAgentsCommand } from './commands/agents';
 import { runWalletCommand } from './commands/wallet';
 import { runSystemCommand } from './commands/system';
 import { runLlmCommand } from './commands/llm';
@@ -178,6 +179,9 @@ export async function runCli(argv: string[], cliContext: CliContext = {}): Promi
           break;
         case 'skills':
           result = await runSkillsCommand(rest, context);
+          break;
+        case 'agents':
+          result = await runAgentsCommand(rest, context);
           break;
         case 'host':
           result = await runHostCommand(rest, context);

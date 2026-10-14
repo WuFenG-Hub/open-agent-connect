@@ -13,6 +13,8 @@ import {
   type DaemonChildStartCause,
 } from './daemonStartupDiagnostics';
 import type { DaemonLifecycleEvent } from '../core/state/daemonStateStore';
+import { doctorClaudeHooks, installClaudeHooks, planClaudeHookInstall, uninstallClaudeHooks } from '../core/agents/claudeHookInstaller';
+import { renderAgentsStatusRows } from './commands/agents';
 import { CLI_VERSION } from './version';
 import { commandAwaitingConfirmation, commandFailed, commandManualActionRequired, commandSuccess, type MetabotCommandResult } from '../core/contracts/commandResult';
 import { createConfigStore, type ConfigStore } from '../core/config/configStore';
@@ -2911,6 +2913,7 @@ async function runDaemonStatusCommand(context: CliRuntimeContext): Promise<Metab
 }
 
 export function createDefaultCliDependencies(context: CliRuntimeContext): CliDependencies {
+  const agentsDir = path.join(normalizeSystemHomeDir(context.env, context.cwd), '.metabot', 'agents');
   async function requestJsonForSelectedActor<T>(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     routePath: string,
@@ -2991,7 +2994,7 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
       message?: string;
     }>(context, 'GET', `/api/browser/resolve?uri=${encodeURIComponent(trimmed)}`);
     if (!response.ok) {
-      return {
+return {
         ok: false,
         code: response.code ?? 'browser_resolve_failed',
         message: response.message ?? 'MetaApp resolve failed.',
@@ -3769,6 +3772,79 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
   }
 
   return {
+    agents: {
+      async status(input) {
+        const baseUrl = await readReachableDaemonBaseUrl(context);
+        if (!baseUrl) {
+          return commandFailed('daemon_unreachable', 'No running MetaBot daemon found. Start it with `metabot daemon start`, then retry.');
+        }
+        const response = await fetch(`${baseUrl}/api/agents/status`);
+        const payload = await response.json() as { state?: string; data?: { agents?: unknown }; message?: string };
+        if (!response.ok || payload.state !== 'success') {
+          return commandFailed('agents_status_failed', payload.message || `Agent status request failed (HTTP ${response.status}).`);
+        }
+        const rows = Array.isArray(payload.data?.agents) ? payload.data?.agents as Array<Record<string, unknown>> : [];
+        if (input.json) return commandSuccess({ agents: rows });
+        return commandSuccess({ agents: rows, formatted: renderAgentsStatusRows(rows as never) });
+      },
+      async installHooks(input) {
+        if (input.host !== 'claude-code') {
+          return commandFailed('invalid_argument', `Unsupported --host value: ${input.host}.`);
+        }
+        const plan = await planClaudeHookInstall({ agentsDir });
+        if (!input.confirm) {
+          return commandAwaitingConfirmation({
+            plan,
+            formatted: [
+              'Install managed Claude Code hooks so local sessions report status to this daemon.',
+              `  settings: ${plan.settingsPath}${plan.settingsExisted ? '' : ' (will be created)'}`,
+              `  events: ${plan.events.join(', ')}`,
+              `  script: ${plan.scriptPath}`,
+              'Existing user hooks are preserved; only entries referencing the managed script are touched.',
+              '',
+              'This writes into your Claude Code settings. Re-run with --confirm to install.',
+            ].join('\n'),
+          });
+        }
+        const result = await installClaudeHooks({ agentsDir });
+        return commandSuccess({
+          installed: result,
+          formatted: [
+            `Claude Code hooks installed into ${result.settingsPath} (events: ${result.events.join(', ')}).`,
+            result.backupPath && result.changed ? `Backup written to ${result.backupPath}.` : '',
+            'Start a Claude Code session; then `metabot agents status` shows it. Uninstall: `metabot agents hooks uninstall --host claude-code`.',
+          ].filter(Boolean).join('\n'),
+        });
+      },
+      async uninstallHooks(input) {
+        if (input.host !== 'claude-code') {
+          return commandFailed('invalid_argument', `Unsupported --host value: ${input.host}.`);
+        }
+        const result = await uninstallClaudeHooks({ agentsDir });
+        return commandSuccess({
+          result,
+          formatted: [
+            `Managed Claude Code hooks removed from ${result.settingsPath}.`,
+            result.removedScript ? 'Hook script removed.' : '',
+          ].filter(Boolean).join('\n'),
+        });
+      },
+      async hooksDoctor(input) {
+        if (input.host !== 'claude-code') {
+          return commandFailed('invalid_argument', `Unsupported --host value: ${input.host}.`);
+        }
+        const report = await doctorClaudeHooks({ agentsDir });
+        const lines = [
+          `settings: ${report.settingsPath}${report.settingsExisted ? '' : ' (missing)'}`,
+          `hooks installed: ${report.installed ? `yes (${report.events.join(', ')})` : 'no'}`,
+          `user hook events preserved: ${report.existingUserHookEvents.join(', ') || '(none)'}`,
+          `hook script: ${report.scriptPresent ? report.scriptPath : 'missing'}`,
+          `daemon endpoint: ${report.endpointPublished ? 'published' : 'not published (start the daemon)'}`,
+        ];
+        if (!report.installed) lines.push('', 'Install with: metabot agents hooks install --host claude-code --confirm');
+        return commandSuccess({ report, formatted: lines.join('\n') });
+      },
+    },
     config: {
       get: async (input) => {
         if (!isSupportedConfigKey(input.key)) {
@@ -6499,6 +6575,7 @@ export function mergeCliDependencies(context: CliRuntimeContext): CliDependencie
     ui: { ...defaults.ui, ...provided.ui },
     skills: { ...defaults.skills, ...provided.skills },
     host: { ...defaults.host, ...provided.host },
+    agents: provided.agents ?? defaults.agents,
     system: { ...defaults.system, ...provided.system },
     llm: { ...defaults.llm, ...provided.llm },
     bot: { ...defaults.bot, ...provided.bot },
