@@ -3571,6 +3571,7 @@ export function createDefaultCliDependencies(context: CliRuntimeContext): CliDep
       const formatted = [
         `Installed skill "${installed.name}"${installed.version ? ` (v${installed.version})` : ''} → ${installed.skillDir}`,
         installed.replaced ? `(replaced previous installation${installed.previousVersion ? ` v${installed.previousVersion}` : ''})` : null,
+        ...(installed.warnings ?? []).map((warning) => `Warning: ${warning}`),
         '',
         'Next steps:',
         `- Read its instructions: metabot skills read --name ${installed.name}`,
