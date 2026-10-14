@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type http from 'node:http';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHttpServer } from './httpServer';
 import {
@@ -8,6 +9,15 @@ import {
   type MetabotPaths,
 } from '../core/state/paths';
 import type { MetabotDaemonHttpHandlers } from './routes/types';
+import { createAgentStatusStore } from '../core/agents/agentStatusStore';
+import { normalizeClaudeHookPayload } from '../core/agents/claudeHookEvents';
+import {
+  AGENT_HOOK_PROTOCOL_VERSION,
+  drainAgentHookSpool,
+  newAgentHookToken,
+  spoolDirPath,
+  writeAgentHookEndpointFile,
+} from '../core/agents/agentHookEndpoint';
 
 const DAEMON_LOCK_BASE_DELAY_MS = 50;
 const DAEMON_LOCK_MAX_ATTEMPTS = 40;
@@ -131,6 +141,14 @@ export function createMetabotDaemon(options: CreateMetabotDaemonOptions): Metabo
   const locksRoot = daemonPaths?.locksRoot ?? paths.locksRoot;
   const lockPath = daemonPaths?.daemonLockPath ?? paths.daemonLockPath;
   const handlers = options.handlers ?? {};
+  const agentsDir = path.join(paths.metabotRoot, 'agents');
+  if (!handlers.agents) {
+    handlers.agents = {
+      store: createAgentStatusStore(),
+      token: newAgentHookToken(),
+      agentsDir,
+    };
+  }
 
   let server: http.Server | null = null;
   let startedAddress: MetabotDaemonAddress | null = null;
@@ -224,6 +242,18 @@ export function createMetabotDaemon(options: CreateMetabotDaemonOptions): Metabo
           port: address.port,
           baseUrl: `http://${host}:${address.port}`,
         };
+        // Publish the hook endpoint (fresh per-boot token) and replay hook
+        // events spooled while no daemon was listening.
+        await writeAgentHookEndpointFile(agentsDir, {
+          port: address.port,
+          token: handlers.agents!.token,
+          version: AGENT_HOOK_PROTOCOL_VERSION,
+        }).catch(() => undefined);
+        await drainAgentHookSpool(spoolDirPath(agentsDir), (record) => {
+          if (record.source !== 'claude-code') return;
+          const event = normalizeClaudeHookPayload(record.payload);
+          if (event) handlers.agents!.store.ingest(event);
+        }).catch(() => undefined);
         return startedAddress;
       } catch (error) {
         await closeServer(server);

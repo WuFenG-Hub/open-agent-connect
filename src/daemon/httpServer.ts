@@ -33,6 +33,7 @@ import { handleTraceRoutes } from './routes/trace';
 import { handleUiRoutes } from './routes/ui';
 import { handleLlmRoutes } from './routes/llm';
 import { handleBotRoutes } from './routes/bot';
+import { handleAgentsRoutes } from './routes/agents';
 import { handleBrowserRoutes } from './routes/browser';
 import type { MetabotDaemonHttpHandlers, RouteContext, RouteHandler } from './routes/types';
 
@@ -70,6 +71,7 @@ const ROUTES: RouteHandler[] = [
   handleUiRoutes,
   handleLlmRoutes,
   handleBotRoutes,
+  handleAgentsRoutes,
 ];
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
