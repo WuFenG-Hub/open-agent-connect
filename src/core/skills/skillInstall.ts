@@ -29,12 +29,19 @@ const DEFAULT_DOWNLOAD_TIMEOUT_MS = 30_000;
 export const SKILL_REGISTRY_FILENAME = 'installed-skills.json';
 
 const SKILL_DOC_FILENAMES = ['SKILL.md', 'skill.md', 'Skill.md'];
+const SKILL_STAGING_PREFIX = '.skill-install-';
+const SKILL_TRASH_DIRNAME = '.skill-trash';
+const SKILL_LOCK_FILENAME = '.skill-install.lock';
+/** Installs take seconds; a lock older than this is a crashed holder. */
+const SKILL_LOCK_STALE_MS = 5 * 60_000;
+const SKILL_LOCK_SPIN_MS = 100;
+const SKILL_LOCK_MAX_SPINS = 600;
 
 export class SkillInstallError extends Error {
-  code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict';
+  code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict' | 'install_locked';
 
   constructor(
-    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict',
+    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict' | 'install_locked',
     message: string,
   ) {
     super(message);
@@ -86,6 +93,8 @@ export interface SkillInstallResult {
   replaced: boolean;
   previousVersion: string | null;
   files: string[];
+  /** Non-fatal notices, e.g. a version downgrade replacing a newer install. */
+  warnings: string[];
 }
 
 function normalizeText(value: unknown): string {
@@ -405,16 +414,154 @@ export async function readInstalledSkillsRegistry(skillsRoot: string): Promise<I
   return { version: 1, skills };
 }
 
+/**
+ * Write the registry atomically: a half-written file must never become the
+ * registry, because a corrupt read degrades to "nothing installed" and locks
+ * the user out of reinstalling (the on-disk dirs then count as foreign).
+ */
 export async function writeInstalledSkillsRegistry(skillsRoot: string, registry: InstalledSkillsRegistry): Promise<void> {
   await fs.mkdir(skillsRoot, { recursive: true });
-  await fs.writeFile(registryPath(skillsRoot), `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+  const target = registryPath(skillsRoot);
+  const tempPath = `${target}.tmp-${randomUUID()}`;
+  try {
+    const handle = await fs.open(tempPath, 'w');
+    try {
+      await handle.writeFile(`${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(tempPath, target);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Serialize installs and uninstalls per skills root (cross-process: CLI
+ * invocations from several agents can race on the registry and skill dirs).
+ * An exclusively-created lock file is released on completion; a lock older
+ * than the stale window belongs to a crashed holder and is stolen.
+ */
+async function withSkillInstallLock<T>(skillsRoot: string, run: () => Promise<T>): Promise<T> {
+  await fs.mkdir(skillsRoot, { recursive: true });
+  const lockPath = path.join(path.resolve(skillsRoot), SKILL_LOCK_FILENAME);
+  for (let spin = 0; ; spin += 1) {
+    let acquired = false;
+    try {
+      const handle = await fs.open(lockPath, 'wx');
+      try {
+        await handle.writeFile(`${process.pid} ${Date.now()}\n`, 'utf8');
+      } finally {
+        await handle.close();
+      }
+      acquired = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    if (acquired) {
+      try {
+        return await run();
+      } finally {
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+      }
+    }
+    try {
+      const stat = await fs.stat(lockPath);
+      if (Date.now() - stat.mtimeMs > SKILL_LOCK_STALE_MS) {
+        await fs.rm(lockPath, { force: true });
+        continue;
+      }
+    } catch {
+      // The holder released between our failed acquire and this stat — retry.
+    }
+    if (spin >= SKILL_LOCK_MAX_SPINS) {
+      throw new SkillInstallError(
+        'install_locked',
+        `Another skill install has held ${lockPath} for over a minute; retry shortly.`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, SKILL_LOCK_SPIN_MS));
+  }
+}
+
+/**
+ * Remove interrupted-install leftovers under the skills root:
+ * - staging directories (`.skill-install-*`) from extractions that never
+ *   reached the swap — safe to delete;
+ * - registry temp files from atomic writes that never renamed;
+ * - swap trash (`.skill-trash/<name>`): when the skill never landed on the
+ *   main root the swap crashed between its two renames, so restore the
+ *   previous version (the registry still vouches for it); otherwise the new
+ *   version is in place and the trash is a post-swap cleanup leftover.
+ */
+export async function sweepSkillInstallLeftovers(skillsRoot: string): Promise<{
+  removedStagingDirs: string[];
+  restoredSkills: string[];
+  removedTrashEntries: string[];
+}> {
+  const root = path.resolve(skillsRoot);
+  const removedStagingDirs: string[] = [];
+  const restoredSkills: string[] = [];
+  const removedTrashEntries: string[] = [];
+  let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { removedStagingDirs, restoredSkills, removedTrashEntries };
+    }
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(SKILL_STAGING_PREFIX)) {
+      await fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => undefined);
+      removedStagingDirs.push(entry.name);
+    }
+    if (!entry.isDirectory() && entry.name.startsWith(`${SKILL_REGISTRY_FILENAME}.tmp-`)) {
+      await fs.rm(path.join(root, entry.name), { force: true }).catch(() => undefined);
+    }
+  }
+  const trashRoot = path.join(root, SKILL_TRASH_DIRNAME);
+  let trashEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    trashEntries = await fs.readdir(trashRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (!trashEntries.length) return { removedStagingDirs, restoredSkills, removedTrashEntries };
+  const registry = await readInstalledSkillsRegistry(root);
+  for (const entry of trashEntries) {
+    if (!entry.isDirectory()) continue;
+    const trashDir = path.join(trashRoot, entry.name);
+    const targetDir = path.join(root, entry.name);
+    const targetExists = await fs.stat(targetDir).then(() => true, () => false);
+    // Restore only registry-vouched skills: a trash entry without a registry
+    // record would resurrect an already-uninstalled skill as a foreign dir.
+    if (!targetExists && registry.skills[entry.name]) {
+      try {
+        await fs.rename(trashDir, targetDir);
+        restoredSkills.push(entry.name);
+        continue;
+      } catch {
+        // Fall through to removal.
+      }
+    }
+    await fs.rm(trashDir, { recursive: true, force: true }).catch(() => undefined);
+    removedTrashEntries.push(entry.name);
+  }
+  await fs.rmdir(trashRoot).catch(() => undefined);
+  return { removedStagingDirs, restoredSkills, removedTrashEntries };
 }
 
 /**
  * Install an already-downloaded skill package archive under the shared skills
  * root. Existing installations of the same name are replaced in place (same
  * publisher or explicit override); a name owned by a different publisher or
- * by a non-registry local skill is a conflict, not a clobber.
+ * by a non-registry local skill is a conflict, not a clobber. The whole
+ * mutation runs under the per-root install lock, after sweeping leftovers
+ * from previously interrupted installs.
  */
 export async function installSkillArchive(input: {
   skillsRoot: string;
@@ -423,11 +570,22 @@ export async function installSkillArchive(input: {
   force?: boolean;
   now?: () => number;
 }): Promise<SkillInstallResult> {
+  return withSkillInstallLock(input.skillsRoot, () => installSkillArchiveLocked(input));
+}
+
+async function installSkillArchiveLocked(input: {
+  skillsRoot: string;
+  archive: Buffer;
+  source?: SkillInstallSource;
+  force?: boolean;
+  now?: () => number;
+}): Promise<SkillInstallResult> {
   const skillsRoot = path.resolve(input.skillsRoot);
   const now = input.now ?? Date.now;
-  const stagingRoot = path.join(skillsRoot, `.skill-install-${randomUUID()}`);
+  const stagingRoot = path.join(skillsRoot, `${SKILL_STAGING_PREFIX}${randomUUID()}`);
 
   await fs.mkdir(skillsRoot, { recursive: true });
+  await sweepSkillInstallLeftovers(skillsRoot).catch(() => undefined);
   let extracted: { entries: string[] };
   try {
     extracted = await extractMetaAppZipArchive({
@@ -487,11 +645,36 @@ export async function installSkillArchive(input: {
     const version = normalizeText(frontmatter.version ?? input.source?.payloadVersion) || '0';
     const description = normalizeText(frontmatter.description ?? input.source?.payloadDescription);
 
-    if (targetExists) {
-      await fs.rm(targetDir, { recursive: true, force: true });
+    const warnings: string[] = [];
+    if (existing?.version && version !== existing.version && compareSkillVersions(version, existing.version) < 0) {
+      warnings.push(
+        `Downgrade: ${name} v${version} replaces the installed v${existing.version}. Install the latest pin to keep the newer version.`,
+      );
     }
-    await fs.mkdir(skillsRoot, { recursive: true });
-    await fs.rename(packageRoot, targetDir);
+
+    // Crash-safe swap: displace the old directory into the trash root first,
+    // so a crash leaves the old or the new version in place — never neither.
+    // The next install's sweep (or any sweep) restores a trashed skill whose
+    // replacement never landed.
+    const trashDir = path.join(skillsRoot, SKILL_TRASH_DIRNAME, name);
+    let displaced = false;
+    if (targetExists) {
+      await fs.mkdir(path.dirname(trashDir), { recursive: true });
+      await fs.rm(trashDir, { recursive: true, force: true });
+      await fs.rename(targetDir, trashDir);
+      displaced = true;
+    }
+    try {
+      await fs.rename(packageRoot, targetDir);
+    } catch (error) {
+      if (displaced) await fs.rename(trashDir, targetDir).catch(() => undefined);
+      throw error;
+    }
+    if (displaced) {
+      await fs.rm(trashDir, { recursive: true, force: true }).catch(() => undefined);
+      // Drop the trash root too when this was its last entry.
+      await fs.rmdir(path.dirname(trashDir)).catch(() => undefined);
+    }
 
     const record: InstalledSkillRecord = {
       name,
@@ -517,10 +700,37 @@ export async function installSkillArchive(input: {
       replaced: Boolean(existing) || targetExists,
       previousVersion: existing?.version || null,
       files: await listFilesRelative(targetDir),
+      warnings,
     };
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Loose dot-numeric compare for skill versions ('0', '1.2', '1.2.3',
+ * '2026.5.5'): numeric segments compare numerically, anything else falls back
+ * to a lexicographic segment compare. Returns <0 when left is older.
+ */
+function compareSkillVersions(left: string, right: string): number {
+  const leftSegments = left.split('.');
+  const rightSegments = right.split('.');
+  const length = Math.max(leftSegments.length, rightSegments.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftSegment = leftSegments[index];
+    const rightSegment = rightSegments[index];
+    if (leftSegment === undefined) return -1;
+    if (rightSegment === undefined) return 1;
+    const leftNumber = /^\d+$/.test(leftSegment) ? Number(leftSegment) : undefined;
+    const rightNumber = /^\d+$/.test(rightSegment) ? Number(rightSegment) : undefined;
+    if (leftNumber !== undefined && rightNumber !== undefined) {
+      if (leftNumber !== rightNumber) return leftNumber - rightNumber;
+      continue;
+    }
+    const order = leftSegment.localeCompare(rightSegment);
+    if (order !== 0) return order < 0 ? -1 : 1;
+  }
+  return 0;
 }
 
 /** Full flow: download the package archive (verifying the pin's digest when advertised), then install it. */
@@ -609,6 +819,13 @@ export async function readInstalledSkill(input: {
 
 /** Remove one chain-installed skill (registry entry + directory). Built-in/local skills are refused. */
 export async function uninstallInstalledSkill(input: {
+  skillsRoot: string;
+  name: string;
+}): Promise<{ name: string; removedDir: boolean }> {
+  return withSkillInstallLock(input.skillsRoot, () => uninstallInstalledSkillLocked(input));
+}
+
+async function uninstallInstalledSkillLocked(input: {
   skillsRoot: string;
   name: string;
 }): Promise<{ name: string; removedDir: boolean }> {

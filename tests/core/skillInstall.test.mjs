@@ -20,6 +20,8 @@ const {
   readInstalledSkill,
   uninstallInstalledSkill,
   readInstalledSkillsRegistry,
+  writeInstalledSkillsRegistry,
+  sweepSkillInstallLeftovers,
   MAX_SKILL_PACKAGE_BYTES,
   SkillInstallError,
 } = require('../../dist/core/skills/skillInstall.js');
@@ -441,4 +443,147 @@ test('bindPlatformSkills binds registry-installed skills into existing host root
   const link = path.join(dshHome, 'skills', 'community-skill');
   const stat = await fs.lstat(link);
   assert.equal(stat.isSymbolicLink(), true);
+});
+
+test('writeInstalledSkillsRegistry is atomic: no temp residue and read-back round-trips', async () => {
+  const root = mkdtempTempRootSync();
+  const skillsRoot = path.join(root, 'skills');
+  await writeInstalledSkillsRegistry(skillsRoot, {
+    version: 1,
+    skills: {
+      'atomic-probe': {
+        name: 'atomic-probe',
+        version: '1.0.0',
+        description: '',
+        creatorMetaId: 'IDQ1',
+        creatorName: '',
+        sourcePinId: '',
+        skillFileUri: '',
+        installedAt: 1,
+        updatedAt: 2,
+        enabled: true,
+      },
+    },
+  });
+  const entries = await fs.readdir(skillsRoot);
+  assert.equal(entries.some((entry) => entry.startsWith('installed-skills.json.tmp-')), false);
+  const registry = await readInstalledSkillsRegistry(skillsRoot);
+  assert.equal(registry.skills['atomic-probe'].version, '1.0.0');
+});
+
+test('sweepSkillInstallLeftovers removes staging dirs, restores vouched trash, and never resurrects uninstalled skills', async () => {
+  const root = mkdtempTempRootSync();
+  const skillsRoot = path.join(root, 'skills');
+
+  // Interrupted extraction: staging dir is garbage.
+  await fs.mkdir(path.join(skillsRoot, '.skill-install-deadbeef'), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, '.skill-install-deadbeef', 'partial'), 'x', 'utf8');
+
+  // Interrupted swap (crash between the two renames): old version in trash,
+  // target missing, registry still vouches for the skill -> restore.
+  const registry = await readInstalledSkillsRegistry(skillsRoot);
+  registry.skills['crashed-swap'] = {
+    name: 'crashed-swap',
+    version: '1.0.0',
+    description: '',
+    creatorMetaId: 'IDQ1',
+    creatorName: '',
+    sourcePinId: '',
+    skillFileUri: '',
+    installedAt: 1,
+    updatedAt: 1,
+    enabled: true,
+  };
+  await writeInstalledSkillsRegistry(skillsRoot, registry);
+  await fs.mkdir(path.join(skillsRoot, '.skill-trash', 'crashed-swap'), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, '.skill-trash', 'crashed-swap', 'SKILL.md'), skillDoc('crashed-swap', '1.0.0'), 'utf8');
+
+  // Post-swap cleanup leftover: target exists, trash is stale -> delete.
+  await fs.mkdir(path.join(skillsRoot, 'already-replaced'), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, 'already-replaced', 'SKILL.md'), skillDoc('already-replaced', '2.0.0'), 'utf8');
+  await fs.mkdir(path.join(skillsRoot, '.skill-trash', 'already-replaced'), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, '.skill-trash', 'already-replaced', 'SKILL.md'), skillDoc('already-replaced', '1.0.0'), 'utf8');
+
+  // Trash without a registry entry and without a target: an uninstalled skill
+  // must not be resurrected as a foreign directory.
+  await fs.mkdir(path.join(skillsRoot, '.skill-trash', 'long-gone'), { recursive: true });
+  await fs.writeFile(path.join(skillsRoot, '.skill-trash', 'long-gone', 'SKILL.md'), skillDoc('long-gone', '1.0.0'), 'utf8');
+
+  const outcome = await sweepSkillInstallLeftovers(skillsRoot);
+  assert.deepEqual(outcome.removedStagingDirs, ['.skill-install-deadbeef']);
+  assert.deepEqual(outcome.restoredSkills, ['crashed-swap']);
+  assert.deepEqual(outcome.removedTrashEntries.sort(), ['already-replaced', 'long-gone'].sort());
+  const restored = await fs.readFile(path.join(skillsRoot, 'crashed-swap', 'SKILL.md'), 'utf8');
+  assert.match(restored, /crashed-swap/);
+  assert.equal(await fs.stat(path.join(skillsRoot, '.skill-trash')).then(() => true, () => false), false);
+});
+
+test('installSkillArchive replaces through the trash root and leaves no leftovers', async () => {
+  const root = mkdtempTempRootSync();
+  const skillsRoot = path.join(root, 'skills');
+  const creator = { creatorMetaId: 'IDQ1', creatorName: 'Pub' };
+  await installSkillArchive({
+    skillsRoot,
+    archive: await makeSkillZip(path.join(root, 'v1'), { 'SKILL.md': skillDoc('swap-skill', '1.0.0') }),
+    source: creator,
+  });
+  await installSkillArchive({
+    skillsRoot,
+    archive: await makeSkillZip(path.join(root, 'v2'), { 'SKILL.md': skillDoc('swap-skill', '2.0.0') }),
+    source: creator,
+  });
+
+  const registry = await readInstalledSkillsRegistry(skillsRoot);
+  assert.equal(registry.skills['swap-skill'].version, '2.0.0');
+  const entries = await fs.readdir(skillsRoot);
+  assert.equal(entries.includes('.skill-trash'), false);
+  assert.equal(entries.some((entry) => entry.startsWith('.skill-install-')), false);
+  const installed = await fs.readFile(path.join(skillsRoot, 'swap-skill', 'SKILL.md'), 'utf8');
+  assert.match(installed, /version: 2\.0\.0/);
+});
+
+test('installSkillArchive warns on downgrades and stays quiet on upgrades', async () => {
+  const root = mkdtempTempRootSync();
+  const skillsRoot = path.join(root, 'skills');
+  const creator = { creatorMetaId: 'IDQ1' };
+
+  const upgraded = await installSkillArchive({
+    skillsRoot,
+    archive: await makeSkillZip(path.join(root, 'a'), { 'SKILL.md': skillDoc('versioned-skill', '1.9.0') }),
+    source: creator,
+  });
+  assert.deepEqual(upgraded.warnings, []);
+
+  const downgraded = await installSkillArchive({
+    skillsRoot,
+    archive: await makeSkillZip(path.join(root, 'b'), { 'SKILL.md': skillDoc('versioned-skill', '1.2.0') }),
+    source: creator,
+  });
+  assert.equal(downgraded.version, '1.2.0');
+  assert.equal(downgraded.previousVersion, '1.9.0');
+  assert.equal(downgraded.warnings.length, 1);
+  assert.match(downgraded.warnings[0], /Downgrade: versioned-skill v1\.2\.0 replaces the installed v1\.9\.0/);
+});
+
+test('concurrent installs of different skills serialize on the per-root lock and both land', async () => {
+  const root = mkdtempTempRootSync();
+  const skillsRoot = path.join(root, 'skills');
+  const [left, right] = await Promise.all([
+    installSkillArchive({
+      skillsRoot,
+      archive: await makeSkillZip(path.join(root, 'left-pkg'), { 'SKILL.md': skillDoc('lock-left', '1.0.0') }),
+      source: { creatorMetaId: 'IDQ1' },
+    }),
+    installSkillArchive({
+      skillsRoot,
+      archive: await makeSkillZip(path.join(root, 'right-pkg'), { 'SKILL.md': skillDoc('lock-right', '1.0.0') }),
+      source: { creatorMetaId: 'IDQ1' },
+    }),
+  ]);
+  assert.equal(left.name, 'lock-left');
+  assert.equal(right.name, 'lock-right');
+  const registry = await readInstalledSkillsRegistry(skillsRoot);
+  assert.ok(registry.skills['lock-left']);
+  assert.ok(registry.skills['lock-right']);
+  assert.equal(await fs.stat(path.join(skillsRoot, '.skill-install.lock')).then(() => true, () => false), false);
 });
