@@ -2971,8 +2971,12 @@ rl.on('line', (line) => {
       runtime: { ...runtime, provider: 'codex', binaryPath },
       prompt: 'hello codex',
       cwd: base,
-      timeout: 1_000,
-      semanticInactivityTimeout: 1_000,
+      // Generous budget: this tests turn-completion logic, not timing. A
+      // cold child spawn can exceed a 1s wall budget on a loaded machine
+      // (concurrent test suites, first-run cache misses), which used to
+      // flake here as a zero-event timeout before the child even exec'd.
+      timeout: 10_000,
+      semanticInactivityTimeout: 10_000,
     },
     { emit: () => {} },
     new AbortController().signal,
