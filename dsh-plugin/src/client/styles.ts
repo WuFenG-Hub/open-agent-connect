@@ -100,6 +100,8 @@ textarea.oac-input { resize: vertical; min-height: 76px; }
 .oac-bot-picker-option { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 6px 8px; border: none; border-radius: 10px; background: transparent; color: inherit; font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
 .oac-bot-picker-option:hover, .oac-bot-picker-option:focus-visible, .oac-bot-picker-option[aria-selected='true'] { background: var(--dsw-alias-interactive-bg-hover); }
 .oac-bot-picker-option:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+.oac-bot-picker-option .oac-bot-picker-label { flex: 1; }
+.oac-bot-picker-count { flex: none; min-width: 18px; height: 16px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--dsw-alias-state-error-primary, #ef4444); color: #fff; font-size: 10px; line-height: 12px; font-weight: 600; }
 .oac-hint { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 /* LLM picker (the DSH composer ModelSelect port): a full-width trigger chip
    plus a two-level menu — Model / Effort root cells drilling into the
@@ -286,6 +288,7 @@ button.oac-a2a-row-active, button.oac-bots-row-active { background: var(--dsw-al
 .oac-a2a-row-name { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oac-a2a-row-text { font-size: 12px; line-height: 16px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oac-a2a-row-time { flex: none; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
+.oac-conv-row-unread { flex: none; display: inline-flex; align-items: center; gap: 5px; }
 /* Trailing hover menu (DSH home session-list pattern): the relative time
    swaps for the "..." button on row hover / while the menu is open; pinned
    rows keep the slot as a pin marker (star crossfades to "..." on hover). */

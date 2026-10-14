@@ -978,6 +978,9 @@ export {
   type GroupTaskRow,
   type GroupTaskUpdate,
   type UnreadState,
+  privateUnreadCount,
+  sumPrivateUnreadCounts,
+  sumPrivateUnreadCountsByFrom,
 } from './unread-logic.js'
 export { PRIVATE_FILE, GROUP_FILE } from './chat-watcher.js'
 export { dispatchSection } from './sections.js'

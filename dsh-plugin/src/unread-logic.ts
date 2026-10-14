@@ -131,7 +131,7 @@ export function clearPrivateMark(
   key: string,
 ): UnreadState | null {
   const marked = state.private[key]
-  if (marked === undefined) return null
+  if (marked === undefined && privateUnreadCount(state, key) === 0) return null
   const priv = { ...state.private }
   delete priv[key]
   const privateCounts = { ...state.privateCounts }
@@ -140,7 +140,7 @@ export function clearPrivateMark(
     ...state,
     private: priv,
     privateCounts,
-    privateSeen: { ...state.privateSeen, [key]: Math.max(state.privateSeen[key] ?? 0, marked) },
+    privateSeen: { ...state.privateSeen, [key]: Math.max(state.privateSeen[key] ?? 0, marked ?? 0) },
   }
 }
 
@@ -174,12 +174,28 @@ export function hasAnyUnread(state: Readonly<UnreadState>): boolean {
   return Object.keys(state.private).length > 0 || Object.keys(state.group).length > 0
 }
 
-/** Total unread private messages across conversations (numeric badges). */
-export function sumPrivateUnreadCounts(state: Readonly<UnreadState>): number {
-  let total = 0
-  for (const value of Object.values(state.privateCounts)) {
-    const count = Math.trunc(Number(value))
-    if (Number.isFinite(count) && count > 0) total += count
+/** One conversation count, including marks persisted before numeric badges existed. */
+export function privateUnreadCount(state: Readonly<UnreadState>, key: string): number {
+  const count = Math.trunc(Number(state.privateCounts?.[key]))
+  if (Number.isFinite(count) && count > 0) return count
+  return Object.hasOwn(state.private, key) ? 1 : 0
+}
+
+/** Unread private-message totals grouped by the local Bot slug. */
+export function sumPrivateUnreadCountsByFrom(state: Readonly<UnreadState>): Record<string, number> {
+  const totals: Record<string, number> = Object.create(null)
+  const keys = new Set([...Object.keys(state.private), ...Object.keys(state.privateCounts ?? {})])
+  for (const key of keys) {
+    const separator = key.indexOf(':')
+    if (separator <= 0 || separator === key.length - 1) continue
+    const from = key.slice(0, separator)
+    const count = privateUnreadCount(state, key)
+    if (count > 0) totals[from] = (totals[from] ?? 0) + count
   }
-  return total
+  return { ...totals }
+}
+
+/** Total unread private messages, using the same counts as the Bot selector. */
+export function sumPrivateUnreadCounts(state: Readonly<UnreadState>): number {
+  return Object.values(sumPrivateUnreadCountsByFrom(state)).reduce((total, count) => total + count, 0)
 }
