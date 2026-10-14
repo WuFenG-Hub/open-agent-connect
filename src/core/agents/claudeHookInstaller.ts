@@ -196,3 +196,39 @@ export async function uninstallClaudeHooks(input: {
   }
   return { settingsPath, changed, removedScript };
 }
+
+export interface ClaudeHookDoctorReport {
+  settingsPath: string;
+  scriptPath: string;
+  settingsExisted: boolean;
+  installed: boolean;
+  events: string[];
+  existingUserHookEvents: string[];
+  scriptPresent: boolean;
+  endpointPublished: boolean;
+}
+
+export async function doctorClaudeHooks(input: {
+  agentsDir: string;
+  homeDir?: string;
+}): Promise<ClaudeHookDoctorReport> {
+  const plan = await planClaudeHookInstall(input);
+  let scriptPresent = false;
+  try {
+    await fs.access(claudeHookScriptPath(input.agentsDir));
+    scriptPresent = true;
+  } catch {
+    scriptPresent = false;
+  }
+  const endpoint = await import('./agentHookEndpoint').then((module) => module.readAgentHookEndpointFile(input.agentsDir));
+  return {
+    settingsPath: plan.settingsPath,
+    scriptPath: plan.scriptPath,
+    settingsExisted: plan.settingsExisted,
+    installed: plan.alreadyInstalled,
+    events: plan.alreadyInstalled ? plan.events : [],
+    existingUserHookEvents: plan.existingUserHookEvents,
+    scriptPresent,
+    endpointPublished: Boolean(endpoint),
+  };
+}

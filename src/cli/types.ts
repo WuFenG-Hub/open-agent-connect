@@ -9,6 +9,12 @@ import type { ScheduleChannel, ScheduleRunExecutor, ScheduleSpec } from '../core
 export type Awaitable<T> = T | Promise<T>;
 
 export interface CliDependencies {
+  agents?: {
+    status: (input: { json: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
+    installHooks: (input: { host: string; confirm: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
+    uninstallHooks: (input: { host: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    hooksDoctor: (input: { host: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   config?: {
     get?: (input: { from?: string; key: string }) => Awaitable<MetabotCommandResult<unknown>>;
     set?: (input: { from?: string; key: string; value: boolean | string }) => Awaitable<MetabotCommandResult<unknown>>;
