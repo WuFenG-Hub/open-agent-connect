@@ -137,6 +137,7 @@ function createTrafficDeps(overrides = {}) {
     spendRecords: [],
     async resolveTrafficAccount(input) {
       deps.resolveCalls.push(input);
+      if (overrides.resolveError) throw overrides.resolveError;
       return trafficAccount;
     },
     async recordSpend(entry) {
@@ -245,7 +246,7 @@ test('writeMvcSponsorPin completes the traffic-billed sponsor flow and journals 
   }]);
 });
 
-test('writeMvcSponsorPin keeps the legacy quota billing when no traffic account resolves', async () => {
+test('writeMvcSponsorPin falls back to the MetaBot wallet when no traffic account resolves', async () => {
   const sponsorClient = createSponsorClient();
   const traffic = createTrafficDeps({ trafficAccount: undefined });
   const { runSelfPaid, state: selfPaidState } = createSelfPaidWorker();
@@ -259,11 +260,35 @@ test('writeMvcSponsorPin keeps the legacy quota billing when no traffic account 
     fetchUtxos: async () => [makeUtxo()],
   });
 
-  assert.equal(selfPaidState.calls, 0);
-  const prePayload = sponsorClient.calls.find(([name]) => name === 'preSponsor')[1];
-  assert.equal('trafficAccount' in prePayload, false);
-  assert.equal(result.feeAssist.billedBy, 'quota');
-  assert.equal(traffic.spendRecords[0].billedBy, 'quota');
+  assert.equal(selfPaidState.calls, 1);
+  assert.equal(result.feeAssist.attempted, true);
+  assert.equal(result.feeAssist.used, false);
+  assert.equal(result.feeAssist.mode, 'self_paid');
+  assert.equal(result.feeAssist.reason, 'service_unavailable');
+  assert.equal(result.feeAssist.stage, 'pre');
+  assert.deepEqual(sponsorClient.calls.map(([name]) => name), ['getAddressInfo', 'getChallenge']);
+  assert.equal(traffic.spendRecords.length, 0);
+});
+
+test('writeMvcSponsorPin falls back when traffic-account resolution throws', async () => {
+  const sponsorClient = createSponsorClient();
+  const traffic = createTrafficDeps({ resolveError: new Error('traffic service offline') });
+  const { runSelfPaid, state: selfPaidState } = createSelfPaidWorker();
+
+  const result = await writeMvcSponsorPin({
+    request: makeRequest(),
+    identity: makeIdentity(),
+    sponsorClient,
+    traffic,
+    runSelfPaid,
+    fetchUtxos: async () => [makeUtxo()],
+  });
+
+  assert.equal(selfPaidState.calls, 1);
+  assert.equal(result.feeAssist.mode, 'self_paid');
+  assert.equal(result.feeAssist.reason, 'service_unavailable');
+  assert.equal(result.feeAssist.stage, 'pre');
+  assert.deepEqual(sponsorClient.calls.map(([name]) => name), ['getAddressInfo', 'getChallenge']);
 });
 
 test('writeMvcSponsorPin falls back to self-paid on sponsor fallback reasons', async () => {
@@ -628,6 +653,59 @@ test('createTrafficSponsorWritePinResolver runs the full traffic flow over a rea
     // The bot got bound to the account on first use.
     const bindings = await trafficAccountService.store.readBindings();
     assert.equal(bindings[FIXTURE_ADDRESS]?.accountId, 'idq1serverderived');
+  } finally {
+    mvcChainAdapter.fetchUtxos = originalFetchUtxos;
+    global.fetch = originalFetch;
+  }
+});
+
+test('createTrafficSponsorWritePinResolver self-pays when the traffic service is unavailable', async () => {
+  const systemHomeDir = await mkdtempTempRoot('oac-sponsor-writepin-offline-');
+  await importOwnerIdentity(systemHomeDir, { name: 'Owner', mnemonic: OWNER_MNEMONIC });
+  const trafficAccountService = createTrafficAccountService({
+    systemHomeDir,
+    fetchImpl: async () => {
+      throw new Error('traffic service offline');
+    },
+  });
+  const resolveSponsorWritePin = createTrafficSponsorWritePinResolver({ trafficAccountService });
+  const originalFetchUtxos = mvcChainAdapter.fetchUtxos;
+  const originalFetch = global.fetch;
+  mvcChainAdapter.fetchUtxos = async () => [makeUtxo(FIXTURE_ADDRESS)];
+  global.fetch = async (url) => {
+    const text = String(url);
+    const json = (body) => ({ ok: true, status: 200, json: async () => body });
+    if (text.includes('/v2/assist/gas/address/info')) {
+      return json({
+        code: 0,
+        data: {
+          exists: true,
+          balance: 5000,
+          grantedAmount: 5000,
+          reservedAmount: 0,
+          spentAmount: 0,
+          availableAmount: 5000,
+          status: 'active',
+        },
+      });
+    }
+    if (text.includes('/v2/assist/gas/mvc/challenge')) {
+      return json({ code: 0, data: { challengeId: 'challenge-1', message: 'sign sponsor challenge' } });
+    }
+    throw new Error(`unexpected sponsor URL: ${text}`);
+  };
+  const { runSelfPaid, state: selfPaidState } = createSelfPaidWorker();
+  try {
+    const result = await resolveSponsorWritePin({
+      request: makeRequest(),
+      identity: makeIdentity(),
+      runSelfPaid,
+    });
+
+    assert.equal(selfPaidState.calls, 1);
+    assert.equal(result.feeAssist.mode, 'self_paid');
+    assert.equal(result.feeAssist.reason, 'service_unavailable');
+    assert.equal(result.feeAssist.stage, 'pre');
   } finally {
     mvcChainAdapter.fetchUtxos = originalFetchUtxos;
     global.fetch = originalFetch;
