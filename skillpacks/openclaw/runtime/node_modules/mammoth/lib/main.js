@@ -1,11 +1,11 @@
 /* global process */
 
-var fs = require("fs");
 var path = require("path");
 
 var mammoth = require("./");
-var promises = require("./promises");
+var fs = require("./fs");
 var images = require("./images");
+var promises = require("./promises");
 
 function main(argv) {
     var docxPath = argv["docx-path"];
@@ -14,7 +14,7 @@ function main(argv) {
     var outputFormat = argv.output_format;
     var styleMapPath = argv.style_map;
 
-    readStyleMap(styleMapPath).then(function(styleMap) {
+    var result = readStyleMap(styleMapPath).then(function(styleMap) {
         var options = {
             styleMap: styleMap,
             outputFormat: outputFormat
@@ -31,7 +31,7 @@ function main(argv) {
 
                 return element.read().then(function(imageBuffer) {
                     var imagePath = path.join(outputDir, filename);
-                    return promises.nfcall(fs.writeFile, imagePath, imageBuffer);
+                    return fs.writeFile(imagePath, imageBuffer);
                 }).then(function() {
                     return {src: filename};
                 });
@@ -49,12 +49,14 @@ function main(argv) {
 
                 outputStream.write(result.value);
             });
-    }).done();
+    });
+
+    promises.toExternalPromise(result).done();
 }
 
 function readStyleMap(styleMapPath) {
     if (styleMapPath) {
-        return promises.nfcall(fs.readFile, styleMapPath, "utf8");
+        return fs.readFile(styleMapPath, "utf8");
     } else {
         return promises.resolve(null);
     }

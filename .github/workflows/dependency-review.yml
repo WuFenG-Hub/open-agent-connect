@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Known GitHub limitation: on Dependabot PRs the Dependabot-secret
+      # GITHUB_TOKEN cannot read the dependency graph, and the action exits
+      # with a misleading "Dependency review is not supported on this
+      # repository" error. The graph itself is always enabled on this public
+      # repo. Tolerate the failure on Dependabot PRs only; human PRs keep it
+      # enforcing.
       - uses: actions/dependency-review-action@v5
+        continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
         with:
           fail-on-severity: moderate
