@@ -57,8 +57,10 @@ export interface MvcSponsorTrafficSpendRecord {
 
 /**
  * Traffic-account billing seams shared by the sponsored write/upload flows.
- * resolveTrafficAccount never throws: it returns undefined to keep the legacy
- * quota path (traffic mode off, no account, unbound bot, backend 404).
+ * resolveTrafficAccount never throws: it returns undefined when traffic mode
+ * is off or the traffic account cannot be resolved. The pin-write flow treats
+ * an undefined account in active traffic mode as sponsor unavailability and
+ * falls back to the MetaBot wallet rather than using the legacy quota path.
  */
 export interface MvcSponsorTrafficDeps {
   resolveTrafficAccount(input: {
