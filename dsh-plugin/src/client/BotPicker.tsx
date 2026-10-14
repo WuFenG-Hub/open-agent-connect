@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { pickDefaultAvailableBotSlug, sortAvailableBotsTwinFirst } from '../bot-order.ts'
+import { pickDefaultAvailableBotSlug, sortAvailableBotsTwinFirst, sortBotsTwinFirst } from '../bot-order.ts'
 import type { BotRow } from './api.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { IconChevronDownOutline14 } from './icons.ts'
 
 /**
- * The shared Bot selector for every picker in the plugin: available Bots only
+ * The shared Bot selector: available Bots by default; history browsers can
+ * include unavailable Bots. Availability requires
  * (availability toggle on + a DSH LLM pair — the preset-chip rule), the Twin
  * Bot first, the rest by profile creation time (oldest first). The default
  * selection everywhere is `pickDefaultAvailableBotSlug(bots)` — the Twin.
@@ -23,6 +24,9 @@ export function BotPicker({
   className,
   formatLabel,
   placeholder,
+  badgeCounts,
+  badgeLabel,
+  includeUnavailable = false,
 }: {
   bots: readonly BotRow[]
   value: string
@@ -34,8 +38,13 @@ export function BotPicker({
   formatLabel?: (bot: BotRow) => string
   /** Empty-value option, rendered only while `value` is ''. */
   placeholder?: string
+  /** Optional per-Bot numeric badges, rendered on the right side of options. */
+  badgeCounts?: Readonly<Record<string, number>>
+  badgeLabel?: (count: number) => string
+  /** History browsers may include Bots that are currently unavailable to run. */
+  includeUnavailable?: boolean
 }): ReactNode {
-  const ordered = sortAvailableBotsTwinFirst(bots)
+  const ordered = includeUnavailable ? sortBotsTwinFirst(bots) : sortAvailableBotsTwinFirst(bots)
   const labelOf = formatLabel ?? ((bot: BotRow) => `${bot.name}${bot.botType === 'twin' ? ' · Twin' : ''}`)
   const valueMissing = value !== '' && !ordered.some((bot) => bot.slug === value)
   const selected = ordered.find((bot) => bot.slug === value)
@@ -118,6 +127,14 @@ export function BotPicker({
             >
               <BotAvatar name={bot.name} src={bot.avatarDataUrl} className="oac-bot-picker-avatar" />
               <span className="oac-bot-picker-label">{labelOf(bot)}</span>
+              {(() => {
+                const count = Math.trunc(Number(badgeCounts?.[bot.slug]) || 0)
+                return count > 0 ? (
+                  <span className="oac-bot-picker-count" aria-label={badgeLabel?.(count)} title={badgeLabel?.(count)}>
+                    {count > 99 ? '99+' : count}
+                  </span>
+                ) : null
+              })()}
             </button>
           ))}
         </div>

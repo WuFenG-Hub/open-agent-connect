@@ -76,6 +76,10 @@ test('the tab strip renders three tabs and hides the official region only via th
   assert.match(component, /openGroupTask\(key\)/)
   assert.match(component, /prefetchAvatars/)
   assert.match(component, /resolveAvatarUrl/)
+  assert.match(component, /sumPrivateUnreadCountsByFrom/)
+  assert.match(component, /badgeCounts=\{unreadCountsByBot\}/)
+  assert.match(component, /oac-conv-row-unread/)
+  assert.match(component, /oac-unread-dot/)
 })
 
 test('conv-tab rows show one time label: the row-top relative time, not the trail swap-label', async () => {
@@ -174,7 +178,7 @@ test('the left lists carry the row menus, staffing slate, collabs, and the creat
 
 test('the mounted lists keep locale coverage in both dictionaries', async () => {
   const locale = await readFile(join(root, 'src/client/locale-conversations.ts'), 'utf8')
-  for (const key of ['convTabStripLabel', 'convTabLocal', 'convTabOnline', 'convTabGroup', 'pickOnlineLeft', 'pickTaskLeft']) {
+  for (const key of ['convTabStripLabel', 'convTabLocal', 'convTabOnline', 'convTabGroup', 'pickOnlineLeft', 'pickTaskLeft', 'unreadCount']) {
     const occurrences = locale.split(`${key}:`).length - 1
     assert.equal(occurrences, 2, `${key} must exist in both en and zh dictionaries`)
   }

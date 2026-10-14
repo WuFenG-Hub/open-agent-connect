@@ -328,6 +328,8 @@ test('Bot pickers share the available-only twin-first BotPicker; app cards pin a
   assert.match(picker, /BotAvatar name=\{bot\.name\}/)
   assert.match(picker, /role=\"listbox\"/)
   assert.match(picker, /role=\"option\"/)
+  assert.match(picker, /badgeCounts\?: Readonly<Record<string, number>>/)
+  assert.match(picker, /oac-bot-picker-count/)
   for (const file of ['AppsPanel.tsx', 'MemoryPanel.tsx', 'ConvTabs.tsx']) {
     const text = await readFile(join(root, 'src/client', file), 'utf8')
     assert.match(text, /<BotPicker/, `${file} renders the shared BotPicker`)
@@ -342,6 +344,7 @@ test('Bot pickers share the available-only twin-first BotPicker; app cards pin a
   const a2a = await readFile(join(root, 'src/client/A2AConversation.tsx'), 'utf8')
   assert.match(a2a, /pickDefaultAvailableBotSlug\(rows\)/)
   const styles = await readFile(join(root, 'src/client/styles.ts'), 'utf8')
+  assert.match(styles, /\.oac-bot-picker-count \{/)
   // The cover grew ~25% and the foot is fixed-height, pinned to the bottom
   // (the body stretches), so short-content cards never grow a tall foot.
   assert.match(styles, /\.oac-apps-card-cover \{[^}]*height: 120px/)

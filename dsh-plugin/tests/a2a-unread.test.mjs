@@ -67,11 +67,24 @@ test('privateRowStatus: seed, change, current', () => {
 test('applyPrivateLatest: inbound marks, local-only never lights a badge', () => {
   let state = plugin.EMPTY_UNREAD
   state = plugin.seedPrivateSeen(state, 'bob:p', 10)
-  state = plugin.applyPrivateLatest(state, 'bob:p', 20, false)
+  state = plugin.applyPrivateLatest(state, 'bob:p', 20, false, 3)
   assert.deepEqual(state.private, { 'bob:p': 20 })
+  assert.deepEqual(state.privateCounts, { 'bob:p': 3 })
+  assert.equal(plugin.sumPrivateUnreadCounts(state), 3)
   state = plugin.applyPrivateLatest(state, 'bob:p', 30, true)
   assert.deepEqual(state.private, {})
   assert.deepEqual(state.privateSeen, { 'bob:p': 30 })
+  assert.deepEqual(state.privateCounts, {})
+})
+
+test('unread counts group by local Bot slug and fall back to one for legacy marks', () => {
+  const state = {
+    ...plugin.EMPTY_UNREAD,
+    private: { 'twin:peer-a': 10, 'worker:peer-b': 20, 'worker:peer-c': 30 },
+    privateCounts: { 'twin:peer-a': 4, 'worker:peer-b': 2 },
+  }
+  assert.deepEqual(plugin.sumPrivateUnreadCountsByFrom(state), { twin: 4, worker: 3 })
+  assert.equal(plugin.sumPrivateUnreadCounts(state), 7)
 })
 
 test('hasAnyUnread drives the entry dot', () => {
@@ -177,4 +190,35 @@ test('host route chat/events/all is wired', async () => {
   const index = await readFile(join(root, 'src/index.ts'), 'utf8')
   assert.match(index, /chat\/events\/all/)
   assert.match(index, /streamAllChatEvents/)
+})
+
+
+test('94 unread messages remain attributable to Bots and clear with their conversation', () => {
+  const state = Object.freeze({
+    ...plugin.EMPTY_UNREAD,
+    private: Object.freeze({ 'twin:peer-a': 10, 'worker:peer-b': 20, 'offline:peer-c': 30 }),
+    privateCounts: Object.freeze({ 'twin:peer-a': 40, 'worker:peer-b': 50, 'offline:peer-c': 4 }),
+  })
+  assert.equal(plugin.sumPrivateUnreadCounts(state), 94)
+  assert.deepEqual(plugin.sumPrivateUnreadCountsByFrom(state), { twin: 40, worker: 50, offline: 4 })
+  const next = plugin.clearPrivateMark(state, 'worker:peer-b')
+  assert.equal(plugin.privateUnreadCount(next, 'worker:peer-b'), 0)
+  assert.equal(plugin.sumPrivateUnreadCounts(next), 44)
+  assert.deepEqual(plugin.sumPrivateUnreadCountsByFrom(next), { twin: 40, offline: 4 })
+  assert.equal(plugin.sumPrivateUnreadCounts(state), 94)
+})
+
+test('legacy marks and count-only records stay visible and clearable', () => {
+  const state = {
+    ...plugin.EMPTY_UNREAD,
+    private: { 'bob:legacy': 0, 'bob:invalid': 20 },
+    privateCounts: { 'bob:invalid': Number.NaN, 'bobby:peer': 6, 'bad:negative': -4, 'bad:infinite': Infinity },
+  }
+  assert.equal(plugin.privateUnreadCount(state, 'bob:legacy'), 1)
+  assert.equal(plugin.privateUnreadCount(state, 'bobby:peer'), 6)
+  assert.deepEqual(plugin.sumPrivateUnreadCountsByFrom(state), { bob: 2, bobby: 6 })
+  assert.equal(plugin.sumPrivateUnreadCounts(state), 8)
+  const next = plugin.clearPrivateMark(state, 'bobby:peer')
+  assert.equal(plugin.sumPrivateUnreadCounts(next), 2)
+  assert.equal(plugin.clearPrivateMark(next, 'bobby:peer'), null)
 })

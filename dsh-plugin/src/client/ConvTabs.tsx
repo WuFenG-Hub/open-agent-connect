@@ -43,7 +43,7 @@ import { pickDefaultAvailableBotSlug } from '../bot-order.ts'
 import { relativeTimeLabel } from '../relative-time.ts'
 import { timestampLabel } from './api.ts'
 import type { UnreadState } from '../unread-logic.ts'
-import { sumPrivateUnreadCounts } from '../unread-logic.ts'
+import { privateUnreadCount, sumPrivateUnreadCounts, sumPrivateUnreadCountsByFrom } from '../unread-logic.ts'
 import { CONV_TABS, loadConvFrom, saveConvFrom, type ConvTab } from '../conv-tab-logic.ts'
 import type { ConvTabState } from './conv-tab-store.ts'
 import type { ConversationsLocaleKey } from './locale-conversations.ts'
@@ -173,7 +173,7 @@ function OnlineList({
       setProfiles(rows)
       setFrom((currentFrom) => {
         if (currentFrom && rows.some((row) => row.slug === currentFrom)) return currentFrom
-        return pickDefaultAvailableBotSlug(rows)
+        return pickDefaultAvailableBotSlug(rows) || rows[0]?.slug || ''
       })
     }).catch((cause: unknown) => {
       if (current) setListError(errorText(cause))
@@ -260,6 +260,8 @@ function OnlineList({
     return map
   }, [profiles])
 
+  const unreadCountsByBot = useMemo(() => sumPrivateUnreadCountsByFrom(unread), [unread])
+
   // Warm the local avatar cache as soon as the list arrives so a remount
   // (tab switch) paints peer faces from memory instead of the proxy.
   useEffect(() => {
@@ -275,6 +277,9 @@ function OnlineList({
         <BotPicker
           bots={profiles}
           value={from}
+          badgeCounts={unreadCountsByBot}
+          badgeLabel={(count) => t('unreadCount', { count })}
+          includeUnavailable
           ariaLabel={t('fieldBot')}
           onChange={(slug) => {
             saveConvFrom(window.localStorage, slug)
@@ -289,6 +294,7 @@ function OnlineList({
         {summaries !== null && summaries.length === 0 ? <p className="oac-note">{t('empty')}</p> : null}
         {summaries?.map((row) => {
           const rowTitle = row.displayName?.trim() || row.peerName || row.peerGlobalMetaId
+          const unreadCount = privateUnreadCount(unread, `${from}:${row.peerGlobalMetaId}`)
           return (
             <div
               key={row.conversationId || row.peerGlobalMetaId}
@@ -318,16 +324,12 @@ function OnlineList({
                 </span>
                 <span className="oac-a2a-row-text">{row.latestText}</span>
               </span>
-              {unread.private[`${from}:${row.peerGlobalMetaId}`]
-                ? (
-                  <span className="oac-unread-count" aria-label={t('unread')}>
-                    {(() => {
-                      const count = Math.trunc(Number(unread.privateCounts[`${from}:${row.peerGlobalMetaId}`]) || 0)
-                      return count > 99 ? '99+' : Math.max(1, count)
-                    })()}
-                  </span>
-                )
-                : null}
+              {unreadCount > 0 ? (
+                <span className="oac-conv-row-unread" aria-label={t('unreadCount', { count: unreadCount })} title={t('unreadCount', { count: unreadCount })}>
+                  <span className="oac-unread-dot" aria-hidden="true" />
+                  <span className="oac-unread-count" aria-hidden="true">{unreadCount > 99 ? '99+' : unreadCount}</span>
+                </span>
+              ) : null}
               {/* No `time`: the row top already carries the relative label
                   (oac-conv-row-time), so the trail's swap-label would double
                   it — the trail renders the hover "…" only. */}
