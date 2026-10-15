@@ -22,12 +22,27 @@ import { isPathInsideDir } from './chainUploadGate';
 import { uploadLocalFileToChain } from './uploadFile';
 import type { Signer } from '../signing/signer';
 
+export type GatedUploadResult = {
+  metafileUri: string;
+  pinId: string;
+  fileName?: string;
+  txids?: string[];
+  metawebUrl?: string;
+  totalCost?: number;
+  network?: string;
+  contentType?: string;
+  bytes?: number;
+  extension?: string;
+  globalMetaId?: string;
+  filePath?: string;
+};
+
 export type GatedUploadFn = (input: {
   slug: string;
   filePath: string;
   network?: string;
   contentType?: string;
-}) => Promise<{ metafileUri: string; pinId: string }>;
+}) => Promise<GatedUploadResult>;
 
 export type ProfileHomeResolver = (slug: string) => Promise<string | null>;
 
@@ -43,18 +58,20 @@ export interface ProfileUploadGateOptions {
     network?: string;
     contentType?: string;
     signer: Signer;
-  }) => Promise<{ metafileUri: string; pinId: string }>;
+  }) => Promise<GatedUploadResult>;
   /** Signer factory; required unless `upload` is overridden. */
   signerForSlug?: (slug: string) => Promise<Signer>;
   log?: (message: string) => void;
 }
 
 export class UploadOutsideWorkspaceError extends Error {
-  constructor(readonly filePath: string, readonly slug: string) {
+  constructor(readonly filePath: string, readonly slug: string, readonly allowedDir?: string) {
+    const destination = allowedDir
+      ? `copy the file into the Bot workspace (${allowedDir}) and retry.`
+      : 'copy the file into the Bot\'s workspace first, or upload it through the raw bytes upload route (e.g. the UI file picker).';
     super(
       `Refused to upload a file outside the Bot workspace: ${filePath} (acting bot: ${slug}). `
-      + 'On-chain publishing is irreversible; copy the file into the Bot\'s workspace first, '
-      + 'or upload it through the raw bytes upload route (e.g. the UI file picker).',
+      + `On-chain publishing is irreversible; ${destination}`,
     );
     this.name = 'UploadOutsideWorkspaceError';
   }
@@ -75,8 +92,7 @@ export function createProfileScopedUpload(
       const signer = options.signerForSlug ? await options.signerForSlug(input.slug) : null;
       const upload = options.upload ?? (async ({ filePath, network, contentType }) => {
         if (!signer) throw new Error('signerForSlug is required for the default upload.');
-        const uploaded = await uploadLocalFileToChain({ filePath, network, contentType, signer });
-        return { metafileUri: uploaded.metafileUri, pinId: uploaded.pinId };
+        return uploadLocalFileToChain({ filePath, network, contentType, signer });
       });
       return upload({
         filePath: input.filePath,
@@ -92,13 +108,12 @@ export function createProfileScopedUpload(
       const signer = options.signerForSlug ? await options.signerForSlug(input.slug) : null;
       const upload = options.upload ?? (async ({ filePath, network, contentType }) => {
         if (!signer) throw new Error('signerForSlug is required for the default upload.');
-        const uploaded = await uploadLocalFileToChain({ filePath, network, contentType, signer });
-        return { metafileUri: uploaded.metafileUri, pinId: uploaded.pinId };
+        return uploadLocalFileToChain({ filePath, network, contentType, signer });
       });
       log(`[UploadGate] External upload approved for ${input.slug}: ${input.filePath}`);
       return upload({ filePath: input.filePath, network: input.network, ...(signer ? { signer } : {}) } as { filePath: string; network?: string; signer: Signer });
     }
     log(`[UploadGate] REFUSED external upload for ${input.slug}: ${input.filePath}`);
-    throw new UploadOutsideWorkspaceError(input.filePath, input.slug);
+    throw new UploadOutsideWorkspaceError(input.filePath, input.slug, homeDir ?? undefined);
   };
 }

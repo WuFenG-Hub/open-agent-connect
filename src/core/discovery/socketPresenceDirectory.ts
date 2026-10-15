@@ -27,7 +27,7 @@ export interface OnlineMetaBotDirectoryItem {
   lastSeenAt: number;
   lastSeenAgoSeconds: number;
   deviceCount: number;
-  online: true;
+  online: boolean;
   name: string;
   goal: string;
 }
@@ -86,7 +86,17 @@ function normalizeBioGoal(bio: unknown): string {
   }
 }
 
-function normalizeUserRow(row: SocketPresenceUserRow): OnlineMetaBotDirectoryItem | null {
+function isWithinOnlineWindow(lastSeenAgoSeconds: number, onlineWindowSeconds: number | null): boolean {
+  if (onlineWindowSeconds === null) {
+    return true;
+  }
+  return lastSeenAgoSeconds <= onlineWindowSeconds;
+}
+
+function normalizeUserRow(
+  row: SocketPresenceUserRow,
+  onlineWindowSeconds: number | null,
+): OnlineMetaBotDirectoryItem | null {
   const globalMetaId = normalizeText(row.globalMetaId);
   if (!globalMetaId) {
     return null;
@@ -95,13 +105,14 @@ function normalizeUserRow(row: SocketPresenceUserRow): OnlineMetaBotDirectoryIte
   const userInfo = row.userInfo && typeof row.userInfo === 'object'
     ? row.userInfo as SocketPresenceUserInfo
     : {} as SocketPresenceUserInfo;
+  const lastSeenAgoSeconds = normalizeInteger(row.lastSeenAgoSeconds);
 
   return {
     globalMetaId,
     lastSeenAt: normalizeInteger(row.lastSeenAt),
-    lastSeenAgoSeconds: normalizeInteger(row.lastSeenAgoSeconds),
+    lastSeenAgoSeconds,
     deviceCount: normalizeInteger(row.deviceCount),
-    online: true,
+    online: isWithinOnlineWindow(lastSeenAgoSeconds, onlineWindowSeconds),
     name: normalizeText(userInfo.name),
     goal: normalizeBioGoal(userInfo.bio),
   };
@@ -120,14 +131,13 @@ function parseOnlineUsersEnvelope(
     ? envelope.data as Record<string, unknown>
     : {};
   const rows = Array.isArray(data.list) ? data.list : [];
-  const bots = rows
-    .map((entry) => normalizeUserRow(entry as SocketPresenceUserRow))
-    .filter((entry): entry is OnlineMetaBotDirectoryItem => entry !== null);
-
   const windowSeconds = data.onlineWindowSeconds;
   const onlineWindowSeconds = typeof windowSeconds === 'number' && Number.isFinite(windowSeconds)
     ? Math.max(0, Math.floor(windowSeconds))
     : null;
+  const bots = rows
+    .map((entry) => normalizeUserRow(entry as SocketPresenceUserRow, onlineWindowSeconds))
+    .filter((entry): entry is OnlineMetaBotDirectoryItem => entry !== null);
 
   return {
     source: 'socket_presence',

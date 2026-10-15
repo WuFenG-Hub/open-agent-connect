@@ -719,6 +719,11 @@ test('default file upload handlers ignore a caller-supplied confirmExternalUploa
   });
   assert.equal(smallResult.ok, false);
   assert.match(smallResult.message, /outside the Bot workspace/);
+  assert.match(smallResult.message, /acting bot:/);
+  assert.doesNotMatch(smallResult.message, /acting bot: actor/);
+  assert.match(smallResult.message, new RegExp(path.resolve(homeDir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(largeResult.message, /outside the Bot workspace/);
+  assert.doesNotMatch(largeResult.message, /acting bot: actor/);
   assert.equal(uploads, 0, 'nothing left the machine');
 });
 
@@ -4575,4 +4580,39 @@ test('bot discoverRuntimes serializes a blocking sweep behind an in-flight sweep
   const after = await handlers.bot.listRuntimes();
   assert.equal(after.data.discoveryStatus.running, false);
   assert.ok(after.data.discoveryStatus.lastFinishedAt);
+});
+
+test('identity create registers the profile when address-init subsidy fails', async (t) => {
+  const homeDir = await createProfileHome('metabot-default-identity-subsidy-fail-', 'active-bot');
+  t.after(async () => {
+    await cleanupProfileHome(homeDir);
+  });
+  const systemHomeDir = deriveSystemHome(homeDir);
+  const handlers = createDefaultMetabotDaemonHandlers({
+    homeDir,
+    systemHomeDir,
+    identitySyncStepDelayMs: 0,
+    getDaemonRecord: () => null,
+    discoverLlmRuntimes: async () => ({ runtimes: [], errors: [] }),
+    requestMvcGasSubsidy: async () => ({
+      success: false,
+      error: 'address-init failed: invalid connection (HTTP 200 OK, service code 7)',
+    }),
+  });
+
+  const result = await handlers.identity.create({
+    name: 'Subsidy Fail Bot',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'identity_bootstrap_failed');
+  assert.match(result.message, /invalid connection/);
+  assert.match(result.message, /HTTP 200/);
+  assert.match(result.message, /service code 7/);
+  const profiles = await listIdentityProfiles(systemHomeDir);
+  const saved = profiles.find((profile) => profile.name === 'Subsidy Fail Bot');
+  assert.ok(saved, 'failed identity create must stay visible in the profile index');
+  await access(saved.homeDir);
+  const retry = await handlers.bot.retryProfileSetup({ slug: saved.slug });
+  assert.notEqual(retry.code, 'profile_not_found');
 });

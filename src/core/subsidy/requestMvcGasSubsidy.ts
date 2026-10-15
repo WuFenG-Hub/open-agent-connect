@@ -63,12 +63,52 @@ function isAcceptedServiceResult(value: unknown, acceptedDuplicate: RegExp): boo
   return code !== null && acceptedDuplicate.test(readServiceMessage(value));
 }
 
-function formatServiceFailure(stage: 'address-init' | 'address-reward', value: unknown): string {
+function formatServiceFailure(
+  stage: 'address-init' | 'address-reward',
+  value: unknown,
+  http?: { status: number; statusText: string },
+): string {
   const message = readServiceMessage(value);
-  if (message) return `${stage} failed: ${message}`;
   const code = readServiceCode(value);
-  if (code !== null) return `${stage} failed: service code ${code}`;
-  return `${stage} failed: invalid service response`;
+  const headline = message
+    ? `${stage} failed: ${message}`
+    : code !== null
+      ? `${stage} failed: service code ${code}`
+      : `${stage} failed: invalid service response`;
+  const extras: string[] = [];
+  if (http) {
+    const statusText = http.statusText.trim();
+    extras.push(statusText ? `HTTP ${http.status} ${statusText}` : `HTTP ${http.status}`);
+  }
+  if (message && code !== null) {
+    extras.push(`service code ${code}`);
+  }
+  return extras.length ? `${headline} (${extras.join(', ')})` : headline;
+}
+
+async function readSubsidyBody(response: {
+  json?: () => Promise<unknown>;
+  text?: () => Promise<string>;
+}): Promise<unknown> {
+  if (typeof response.text === 'function') {
+    const text = await response.text();
+    if (!text.trim()) {
+      return { message: 'empty body' };
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return { message: text.trim().slice(0, 300) };
+    }
+  }
+  if (typeof response.json === 'function') {
+    try {
+      return await response.json();
+    } catch (error) {
+      return { message: error instanceof Error ? error.message : 'unreadable body' };
+    }
+  }
+  return { message: 'unreadable body' };
 }
 
 export async function requestMvcGasSubsidy(
@@ -108,20 +148,21 @@ export async function requestMvcGasSubsidy(
       },
       body: requestBody,
     });
-    const step1 = await step1Response.json();
+    const step1 = await readSubsidyBody(step1Response);
+    const step1Http = { status: step1Response.status, statusText: step1Response.statusText };
 
     if (!step1Response.ok) {
       return {
         success: false,
         step1,
-        error: `${formatServiceFailure('address-init', step1)} (HTTP ${step1Response.status} ${step1Response.statusText})`,
+        error: formatServiceFailure('address-init', step1, step1Http),
       };
     }
     if (!isAcceptedServiceResult(step1, /^address already init(?:ialized)?$/i)) {
       return {
         success: false,
         step1,
-        error: formatServiceFailure('address-init', step1),
+        error: formatServiceFailure('address-init', step1, step1Http),
       };
     }
 
@@ -147,14 +188,15 @@ export async function requestMvcGasSubsidy(
       },
       body: requestBody,
     });
-    const step2 = await step2Response.json();
+    const step2 = await readSubsidyBody(step2Response);
+    const step2Http = { status: step2Response.status, statusText: step2Response.statusText };
 
     if (!step2Response.ok) {
       return {
         success: false,
         step1,
         step2,
-        error: `${formatServiceFailure('address-reward', step2)} (HTTP ${step2Response.status} ${step2Response.statusText})`,
+        error: formatServiceFailure('address-reward', step2, step2Http),
       };
     }
     if (!isAcceptedServiceResult(step2, /^address already rewarded$/i)) {
@@ -162,7 +204,7 @@ export async function requestMvcGasSubsidy(
         success: false,
         step1,
         step2,
-        error: formatServiceFailure('address-reward', step2),
+        error: formatServiceFailure('address-reward', step2, step2Http),
       };
     }
 

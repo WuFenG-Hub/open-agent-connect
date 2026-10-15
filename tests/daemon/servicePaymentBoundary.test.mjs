@@ -707,6 +707,29 @@ async function createServiceCallHarness(t, options = {}) {
     },
   });
 
+  // Order-flow tests predate the confirm_all hold. They exercise the path
+  // after the caller has confirmed; pass confirmed: false to assert the hold.
+  const callService = handlers.services.call.bind(handlers.services);
+  handlers.services.call = async (input) => {
+    if (!input || typeof input !== 'object') {
+      return callService(input);
+    }
+    if (input.confirmed === true || input.confirmed === false) {
+      return callService(input);
+    }
+    const request = input.request && typeof input.request === 'object' ? input.request : null;
+    if (request && (request.confirmed === true || request.confirmed === false)) {
+      return callService(input);
+    }
+    if (request) {
+      return callService({
+        ...input,
+        request: { ...request, confirmed: true },
+      });
+    }
+    return callService({ ...input, confirmed: true });
+  };
+
   return {
     homeDir,
     callerPair,
@@ -7478,4 +7501,35 @@ test('inbound provider ORDER stays reprocessable when the chain API is unavailab
   const sellerOrder = stateAfterRetry.sellerOrders.find((entry) => entry.orderTxid === orderTxid);
   assert.ok(sellerOrder, 'expected the retried order to execute');
   assert.equal(sellerOrder.state, 'rating_pending');
+});
+
+test('confirm_all service call returns awaiting_confirmation before any order write', async (t) => {
+  const harness = await createServiceCallHarness(t, {
+    servicePaymentExecutor: {
+      async execute() {
+        throw new Error('payment must not run before confirmation');
+      },
+    },
+  });
+
+  const called = await harness.handlers.services.call({
+    request: {
+      servicePinId: 'chain-service-pin-1',
+      providerGlobalMetaId: 'idq1provider',
+      userTask: 'Tell me tomorrow weather',
+      taskContext: 'Shanghai tomorrow',
+      policyMode: 'confirm_all',
+      confirmed: false,
+    },
+  });
+
+  assert.equal(called.ok, true, JSON.stringify(called));
+  assert.equal(called.state, 'awaiting_confirmation');
+  assert.equal(called.data.confirmation.requiresConfirmation, true);
+  assert.equal(called.data.confirmation.policyMode, 'confirm_all');
+  assert.equal(called.data.confirmation.confirmationBypassed, false);
+  assert.equal(called.data.traceId, null);
+  assert.equal(called.data.serviceOrderPinId ?? null, null);
+  assert.equal(called.data.orderPinId ?? null, null);
+  assert.equal(harness.writes.length, 0);
 });

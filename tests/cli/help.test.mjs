@@ -45,6 +45,10 @@ test('runCli prints top-level help text for `metabot --help` without a JSON enve
   assert.match(output, /^\s+metaapp\s+.*owner list\/delete.*project packaging/m);
   assert.match(output, /^\s+metaid\s+/m);
   assert.match(output, /^\s+metaid\s+.*on-chain MetaID identities/m);
+  assert.match(output, /^\s+qanda\s+/m);
+  assert.match(output, /^\s+protocol\s+/m);
+  assert.match(output, /^\s+simplenote\s+/m);
+  assert.match(output, /^\s+metaweb\s+/m);
   assert.doesNotMatch(output, /^\s+master\s+/m);
   assert.doesNotMatch(output, /^\s+evolution\s+/m);
   assert.equal(output.includes('"ok"'), false);
@@ -78,6 +82,38 @@ test('runCli prints machine-readable top-level help for `metabot --help --json`'
   )));
   assert.equal(output.subcommands.some((entry) => entry.name === 'master'), false);
   assert.equal(output.subcommands.some((entry) => entry.name === 'evolution'), false);
+  for (const name of ['qanda', 'protocol', 'simplenote', 'metaweb']) {
+    assert.equal(output.subcommands.some((entry) => entry.name === name), true, name);
+  }
+});
+
+test('runCli prints surf parent help instead of the root command list', async () => {
+  const stdout = [];
+  const exitCode = await runCli(['surf', '--help'], {
+    stdout: { write: (chunk) => { stdout.push(String(chunk)); return true; } },
+    stderr: { write: () => true },
+  });
+  assert.equal(exitCode, 0);
+  const output = stdout.join('');
+  assert.match(output, /^Usage:\s+metabot surf <status\|run\|enable\|disable\|budget>/m);
+  assert.equal(output.includes('Usage: metabot <command>'), false);
+  for (const name of ['status', 'run', 'enable', 'disable', 'budget']) {
+    assert.match(output, new RegExp(`^\\s+${name}\\s+`, 'm'));
+  }
+});
+
+test('runCli does not fall back to root help for an unknown command --help', async () => {
+  const stdout = [];
+  const exitCode = await runCli(['not-a-real-command', '--help'], {
+    stdout: { write: (chunk) => { stdout.push(String(chunk)); return true; } },
+    stderr: { write: () => true },
+  });
+  const output = stdout.join('');
+  assert.equal(output.includes('Usage: metabot <command>'), false);
+  assert.equal(exitCode, 1);
+  const envelope = JSON.parse(output);
+  assert.equal(envelope.code, 'unknown_command');
+  assert.match(envelope.message, /Unknown command: not-a-real-command/);
 });
 
 test('runCli rejects retired master, evolution, and loom commands', async () => {

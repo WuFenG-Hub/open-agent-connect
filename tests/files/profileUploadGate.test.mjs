@@ -102,6 +102,49 @@ test('unknown profile is outside by definition; symlink escape refused', async (
   assert.equal(isPathInsideDir(link, homeDir), false);
 });
 
+test('outside-workspace error names the acting bot and the allowed directory', async () => {
+  const { homeDir } = makeHome('metabot-gate-msg-');
+  const outside = path.join(path.dirname(homeDir), 'outside.txt');
+  writeFileSync(outside, 'nope');
+  const gate = createProfileScopedUpload({
+    profileHomeDir: async () => homeDir,
+    upload: async () => ({ metafileUri: 'metafile://x', pinId: 'p' }),
+  });
+  await assert.rejects(
+    gate({ slug: 'bob', filePath: outside }),
+    (error) => {
+      assert.equal(error instanceof UploadOutsideWorkspaceError, true);
+      assert.match(error.message, /acting bot: bob/);
+      assert.match(error.message, new RegExp(homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      return true;
+    },
+  );
+});
+
+test('gated upload success includes fileName, metawebUrl, and txids', async () => {
+  const { homeDir } = makeHome('metabot-gate-fields-');
+  const inside = path.join(homeDir, 'note.txt');
+  writeFileSync(inside, 'hello');
+  const gate = createProfileScopedUpload({
+    profileHomeDir: async () => homeDir,
+    signerForSlug: async () => ({
+      writePin: async () => ({
+        pinId: 'abc123i0',
+        txids: ['abc123'],
+        totalCost: 1,
+        network: 'mvc',
+        globalMetaId: 'gm-bob',
+      }),
+    }),
+  });
+  const result = await gate({ slug: 'bob', filePath: inside });
+  assert.equal(result.fileName, 'note.txt');
+  assert.equal(result.pinId, 'abc123i0');
+  assert.deepEqual(result.txids, ['abc123']);
+  assert.match(result.metawebUrl, /openagentinternet\.org\/browser\/metafile\/abc123i0/);
+  assert.match(result.metafileUri, /^metafile:\/\/abc123i0/);
+});
+
 test('daemon engine construction passes a gated deliverable upload (source wiring)', async () => {
   const fs = await import('node:fs');
   const runtime = fs.readFileSync('src/cli/runtime.ts', 'utf8');

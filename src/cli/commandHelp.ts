@@ -1,4 +1,4 @@
-import { commandSuccess, type MetabotCommandResult } from '../core/contracts/commandResult';
+import { commandFailed, commandSuccess, type MetabotCommandResult } from '../core/contracts/commandResult';
 import { SUPPORTED_PLATFORM_IDS } from '../core/platform/platformRegistry';
 import type { CliRuntimeContext } from './types';
 
@@ -114,9 +114,15 @@ function positionalCommandPath(args: string[]): string[] {
 
 export function resolveCommandHelpSpec(args: string[]): CommandHelpSpec | null {
   const path = positionalCommandPath(args);
+  if (path.length === 0) {
+    return ROOT_COMMAND_HELP;
+  }
 
   let best: CommandHelpSpec | null = null;
   for (const spec of COMMAND_HELP_SPECS) {
+    if (spec.commandPath.length === 0 || spec.commandPath.length > path.length) {
+      continue;
+    }
     const matches = spec.commandPath.every((segment, index) => path[index] === segment);
     if (!matches) {
       continue;
@@ -133,7 +139,11 @@ export function writeResolvedHelp(
   context: CliRuntimeContext,
   args: string[]
 ): MetabotCommandResult<unknown> & { __rawStdoutHandled?: boolean } {
-  const spec = resolveCommandHelpSpec(args) ?? ROOT_COMMAND_HELP;
+  const spec = resolveCommandHelpSpec(args);
+  if (!spec) {
+    const command = positionalCommandPath(args).join(' ');
+    return commandFailed('unknown_command', `Unknown command: ${command}`);
+  }
   if (helpJsonRequested(args)) {
     const payload = {
       commandPath: spec.commandPath,
@@ -220,6 +230,10 @@ export const ROOT_COMMAND_HELP: CommandHelpSpec = {
     { name: 'buzz', summary: 'Publish simplebuzz posts to MetaWeb.' },
     { name: 'metaapp', summary: 'Manage MetaApp owner list/delete, payload publishing, project packaging, sharing, viewing, and commenting.' },
     { name: 'metaid', summary: 'Search on-chain MetaID identities (users and Bots) and read their profiles.' },
+    { name: 'qanda', summary: 'Publish and read the on-chain Q&A community.' },
+    { name: 'protocol', summary: 'Browse and publish the on-chain MetaID protocol registry.' },
+    { name: 'simplenote', summary: 'Publish a long-form note or article on-chain.' },
+    { name: 'metaweb', summary: 'Search MetaWeb and read on-chain pins.' },
     { name: 'chain', summary: 'Write arbitrary MetaID tuples and protocol payloads on-chain.' },
     { name: 'wallet', summary: 'Inspect local wallet balances across supported chains.' },
     { name: 'traffic', summary: 'Manage the traffic (account-quota gas credit) mode, balance, usage, grants, and redeem codes.' },
@@ -3423,6 +3437,19 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
       { name: 'self-identity', summary: 'Show the Bot\'s current dream-written self-identity.' },
     ],
     optionalFlags: [HELP_JSON_FLAG],
+  },
+  {
+    commandPath: ['surf'],
+    summary: 'MetaWeb surf (AI internet browsing): run reports, pre-dream toggle, and interaction budget.',
+    usage: 'metabot surf <status|run|enable|disable|budget>',
+    subcommands: [
+      { name: 'status', summary: 'Show surf runs, the pre-dream surf toggle, and the interaction budget.' },
+      { name: 'run', summary: 'Start a MetaWeb surf run now.' },
+      { name: 'enable', summary: 'Enable pre-dream surfing for the Bot.' },
+      { name: 'disable', summary: 'Disable pre-dream surfing for the Bot.' },
+      { name: 'budget', summary: 'Set the per-run chain-write interaction budget.' },
+    ],
+    optionalFlags: [FROM_BOT_FLAG, HELP_JSON_FLAG],
   },
   {
     commandPath: ['surf', 'status'],

@@ -151,3 +151,20 @@ test('runCli default `metabot browser link` handler returns the bare URI when no
   assert.equal(envelope.ok, true);
   assert.deepEqual(envelope.data, { uri: 'metaid://idq1alice' });
 });
+
+test('runCli accepts --json on browser link and returns the resolved URL', async () => {
+  const systemHome = await mkdtempTempRoot('oac-cli-browser-link-json-');
+  const { exitCode, envelope } = await runBrowserCli([
+    'browser',
+    'link',
+    '--uri', `metaid://idq1alice`,
+    '--json',
+  ], {
+    env: { HOME: systemHome, METABOT_DAEMON_BASE_URL: 'http://127.0.0.1:10001' },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.code, undefined);
+  assert.match(envelope.data.localUiUrl, /^http:\/\/127\.0\.0\.1:10001\/browser\/metaid\/idq1alice$/);
+});

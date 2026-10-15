@@ -1030,3 +1030,21 @@ test('runCli fails `metabot services rate` when --chain value is unsupported', a
   assert.equal(envelope.code, 'invalid_flag');
   assert.match(envelope.message, /Unsupported --chain value/);
 });
+
+test('services owned without a subcommand explains owned list usage', async () => {
+  const stdout = [];
+  const exitCode = await runCli(['services', 'owned'], {
+    stdout: { write: (chunk) => { stdout.push(String(chunk)); return true; } },
+    stderr: { write: () => true },
+    dependencies: {
+      services: {
+        listOwned: async () => commandSuccess({ items: [] }),
+      },
+    },
+  });
+  const envelope = JSON.parse(stdout.join('').trim());
+  assert.equal(exitCode, 1);
+  assert.equal(envelope.code, 'missing_subcommand');
+  assert.match(envelope.message, /metabot services owned list/);
+  assert.equal(envelope.message.includes('Unknown command'), false);
+});

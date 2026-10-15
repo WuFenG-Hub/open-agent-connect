@@ -74,6 +74,47 @@ test('readOnlineMetaBotsFromSocketPresence returns normalized bot rows from onli
   });
 });
 
+test('readOnlineMetaBotsFromSocketPresence marks rows outside onlineWindowSeconds offline', async () => {
+  const result = await readOnlineMetaBotsFromSocketPresence({
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          code: 0,
+          data: {
+            total: 2,
+            onlineWindowSeconds: 90,
+            list: [
+              {
+                globalMetaId: 'gm-alice',
+                lastSeenAt: 1,
+                lastSeenAgoSeconds: 728504,
+                deviceCount: 1,
+                userInfo: { name: '' },
+              },
+              {
+                globalMetaId: 'gm-bob',
+                lastSeenAt: 2,
+                lastSeenAgoSeconds: 18,
+                deviceCount: 1,
+                userInfo: { name: 'Bob' },
+              },
+            ],
+          },
+        };
+      },
+    }),
+    apiBaseUrl: 'https://so.metaid.io/chat-api',
+  });
+
+  const alice = result.bots.find((bot) => bot.globalMetaId === 'gm-alice');
+  const bob = result.bots.find((bot) => bot.globalMetaId === 'gm-bob');
+  assert.equal(result.onlineWindowSeconds, 90);
+  assert.equal(alice.online, false);
+  assert.equal(alice.lastSeenAgoSeconds, 728504);
+  assert.equal(bob.online, true);
+});
+
 test('readOnlineMetaBotsFromSocketPresence clamps limit to API maximum size 100', async () => {
   const calls = [];
   await readOnlineMetaBotsFromSocketPresence({

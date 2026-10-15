@@ -169,6 +169,51 @@ test('primary runtime catalog includes shared MetaBot skills when host roots are
   assert.equal(result.rootDiagnostics.some((entry) => entry.rootId === 'metabot-shared' && entry.status === 'readable'), true);
 });
 
+test('unhealthy primary runtime error names that runtime and a healthy alternative', async () => {
+  const { systemHome, profileRoot, slug } = await createProfileHome();
+  const paths = resolveMetabotPaths(profileRoot);
+  const runtimeStore = createLlmRuntimeStore(paths);
+  const bindingStore = createLlmBindingStore(paths);
+  const primary = runtime('llm_openclaw_opt_openclaw', 'openclaw', 'detected', {
+    binaryPath: '/opt/homebrew/bin/openclaw',
+  });
+  primary.healthReason = 'Readiness probe timed out after 30000ms';
+  const fallback = runtime('llm_workbuddy_codebuddy', 'workbuddy', 'detected', {
+    binaryPath: '/opt/homebrew/bin/codebuddy',
+  });
+  fallback.healthReason = 'codebuddy result failed';
+  const healthy = runtime('llm_claude_code_local_claude', 'claude-code', 'healthy', {
+    binaryPath: '/Users/example/.local/bin/claude',
+  });
+  await runtimeStore.write({
+    version: 1,
+    runtimes: [primary, fallback, healthy],
+  });
+  await bindingStore.write({
+    version: 1,
+    bindings: [
+      binding('lb_primary_openclaw', slug, primary.id, 'primary'),
+      binding('lb_fallback_workbuddy', slug, fallback.id, 'fallback'),
+    ],
+  });
+
+  const catalog = createPlatformSkillCatalog({
+    runtimeStore,
+    bindingStore,
+    systemHomeDir: systemHome,
+    projectRoot: profileRoot,
+    env: {},
+  });
+  const result = await catalog.listPrimaryRuntimeSkills({ metaBotSlug: slug });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'primary_runtime_unavailable');
+  assert.match(result.message, /llm_openclaw_opt_openclaw/);
+  assert.match(result.message, /\/opt\/homebrew\/bin\/openclaw/);
+  assert.match(result.message, /Readiness probe timed out after 30000ms/);
+  assert.match(result.message, /llm_claude_code_local_claude/);
+});
+
 test('primary runtime catalog falls back to a healthy fallback runtime when primary is unavailable', async () => {
   const { systemHome, profileRoot, slug } = await createProfileHome();
   const paths = resolveMetabotPaths(profileRoot);

@@ -68,7 +68,7 @@ test('requestMvcGasSubsidy rejects an address-init business failure before rewar
   ], calls);
 
   assert.equal(result.success, false);
-  assert.equal(result.error, 'address-init failed: init funding unavailable');
+  assert.equal(result.error, 'address-init failed: init funding unavailable (HTTP 200 OK, service code 1)');
   assert.equal(calls.length, 1);
 });
 
@@ -79,12 +79,23 @@ test('requestMvcGasSubsidy rejects an address-reward business failure returned w
   ]);
 
   assert.equal(result.success, false);
-  assert.equal(result.error, 'address-reward failed: asset utxo list is empty');
+  assert.equal(result.error, 'address-reward failed: asset utxo list is empty (HTTP 200 OK, service code 1)');
   assert.deepEqual(result.step2, {
     code: 1,
     message: 'asset utxo list is empty',
     data: null,
   });
+});
+
+test('requestMvcGasSubsidy exposes HTTP status and service code for an address-init invalid connection', async () => {
+  const result = await createRequest([
+    jsonResponse({ code: 7, message: 'invalid connection', data: null }),
+  ]);
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /address-init failed: invalid connection/);
+  assert.match(result.error, /HTTP 200/);
+  assert.match(result.error, /service code 7/);
 });
 
 test('requestMvcGasSubsidy preserves service context for HTTP failures', async () => {
@@ -98,6 +109,6 @@ test('requestMvcGasSubsidy preserves service context for HTTP failures', async (
   assert.equal(result.success, false);
   assert.equal(
     result.error,
-    'address-init failed: Auth verified signature err (HTTP 401 Unauthorized)',
+    'address-init failed: Auth verified signature err (HTTP 401 Unauthorized, service code 2)',
   );
 });
