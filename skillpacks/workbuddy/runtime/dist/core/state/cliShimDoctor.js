@@ -102,7 +102,9 @@ async function buildCliRuntimeDoctorCheck(systemHomeDir, env, cwd, currentEntryP
                 `Run \`oac install\` from the OAC install you want canonical — it rewrites ${canonicalShimPath} to that install's dist.`,
                 `Make ${node_path_1.default.join(canonicalBinDir, '')} the first PATH entry (or invoke ${canonicalShimPath} directly) so the shim is what actually runs.`,
                 'Remove redundant installs you do not want (e.g. `npm uninstall -g open-agent-connect` or the equivalent homebrew formula).',
-                'Run `metabot daemon restart` so the tracked daemon runs from the canonical entry too.',
+                // A daemon restart re-spawns from whichever CLI runs it, so the
+                // restart itself must go through the canonical shim.
+                `Run \`${canonicalShimPath} daemon restart\` (not your current entry) so the tracked daemon runs from the canonical entry too.`,
             ],
         }),
     };

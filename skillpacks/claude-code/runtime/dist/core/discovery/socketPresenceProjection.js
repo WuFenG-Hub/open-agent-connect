@@ -70,7 +70,7 @@ function decorateRecordsWithOnlineBots(input) {
             : null;
         return {
             ...record,
-            online: Boolean(onlineBot),
+            online: onlineBot?.online === true,
             lastSeenSec: normalizeLastSeenSec(lastSeenAt),
             lastSeenAt,
             lastSeenAgoSeconds: typeof onlineBot?.lastSeenAgoSeconds === 'number'

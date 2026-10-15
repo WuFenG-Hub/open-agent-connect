@@ -13,6 +13,7 @@ export interface RequestMvcGasSubsidyResult {
 export interface RequestMvcGasSubsidyDependencies {
     addressInitUrl?: string;
     addressRewardUrl?: string;
+    rewardChallengeUrl?: string;
     fetchImpl?: typeof fetch;
     wait?: (ms: number) => Promise<void>;
     waitMs?: number;

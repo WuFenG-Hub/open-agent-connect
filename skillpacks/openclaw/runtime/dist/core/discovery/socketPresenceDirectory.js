@@ -39,7 +39,13 @@ function normalizeBioGoal(bio) {
         return bioStr;
     }
 }
-function normalizeUserRow(row) {
+function isWithinOnlineWindow(lastSeenAgoSeconds, onlineWindowSeconds) {
+    if (onlineWindowSeconds === null) {
+        return true;
+    }
+    return lastSeenAgoSeconds <= onlineWindowSeconds;
+}
+function normalizeUserRow(row, onlineWindowSeconds) {
     const globalMetaId = normalizeText(row.globalMetaId);
     if (!globalMetaId) {
         return null;
@@ -47,12 +53,13 @@ function normalizeUserRow(row) {
     const userInfo = row.userInfo && typeof row.userInfo === 'object'
         ? row.userInfo
         : {};
+    const lastSeenAgoSeconds = normalizeInteger(row.lastSeenAgoSeconds);
     return {
         globalMetaId,
         lastSeenAt: normalizeInteger(row.lastSeenAt),
-        lastSeenAgoSeconds: normalizeInteger(row.lastSeenAgoSeconds),
+        lastSeenAgoSeconds,
         deviceCount: normalizeInteger(row.deviceCount),
-        online: true,
+        online: isWithinOnlineWindow(lastSeenAgoSeconds, onlineWindowSeconds),
         name: normalizeText(userInfo.name),
         goal: normalizeBioGoal(userInfo.bio),
     };
@@ -67,13 +74,13 @@ function parseOnlineUsersEnvelope(payload) {
         ? envelope.data
         : {};
     const rows = Array.isArray(data.list) ? data.list : [];
-    const bots = rows
-        .map((entry) => normalizeUserRow(entry))
-        .filter((entry) => entry !== null);
     const windowSeconds = data.onlineWindowSeconds;
     const onlineWindowSeconds = typeof windowSeconds === 'number' && Number.isFinite(windowSeconds)
         ? Math.max(0, Math.floor(windowSeconds))
         : null;
+    const bots = rows
+        .map((entry) => normalizeUserRow(entry, onlineWindowSeconds))
+        .filter((entry) => entry !== null);
     return {
         source: 'socket_presence',
         total: normalizeInteger(data.total, bots.length),

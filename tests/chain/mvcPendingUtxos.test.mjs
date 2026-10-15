@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { mkdtempTempRoot } from '../helpers/tempRoots.mjs';
 
 const require = createRequire(import.meta.url);
 const {
   getMvcUtxoOutpointKey,
   rememberPendingMvcTransaction,
   resolveSpendableMvcUtxos,
+  configurePendingMvcUtxoPersistence,
   __clearPendingMvcUtxosForTests,
+  __setPendingMvcUtxoJournalPathForTests,
 } = require('../../dist/core/chain/mvcPendingUtxos.js');
 
 const ADDRESS = 'mvc-address-1';
@@ -129,4 +132,39 @@ test('getMvcUtxoOutpointKey normalizes txid, index, and optional address', () =>
     txId: ' ABCDEF1234 ',
     outputIndex: 2,
   }), 'abcdef1234:2');
+});
+
+test('persisted journal survives an in-memory reset (cross-process spend guard)', async (t) => {
+  const tempRoot = await mkdtempTempRoot('oac-pending-utxo-journal-');
+  t.after(async () => {
+    __setPendingMvcUtxoJournalPathForTests(null);
+    __clearPendingMvcUtxosForTests();
+  });
+  const journalPath = require('node:path').join(tempRoot, 'pending-mvc-utxos.json');
+  configurePendingMvcUtxoPersistence({ journalPath });
+
+  const spent = utxo({ txId: 'CROSS-PROCESS-SPENT', outputIndex: 0 });
+  const change = utxo({ txId: 'CROSS-PROCESS-CHANGE', outputIndex: 1, satoshis: 2_000, height: 0 });
+  rememberPendingMvcTransaction({
+    address: ADDRESS,
+    spentUtxos: [spent],
+    createdUtxos: [change],
+    now: NOW,
+  });
+
+  // Simulate the next process: fresh in-memory maps, journal on disk.
+  __clearPendingMvcUtxosForTests();
+
+  assert.deepEqual(resolveSpendableMvcUtxos({
+    address: ADDRESS,
+    utxos: [spent, utxo({ txId: 'fresh-tx', outputIndex: 0 })],
+    now: NOW + 1_000,
+  }).map((entry) => entry.txId), ['fresh-tx', 'CROSS-PROCESS-CHANGE']);
+
+  // Journal entries expire with the same TTL as in-memory ones.
+  assert.deepEqual(resolveSpendableMvcUtxos({
+    address: ADDRESS,
+    utxos: [spent],
+    now: NOW + PENDING_TTL_MS,
+  }).map((entry) => entry.txId), ['CROSS-PROCESS-SPENT']);
 });

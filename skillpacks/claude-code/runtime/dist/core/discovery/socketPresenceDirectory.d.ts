@@ -3,7 +3,7 @@ export interface OnlineMetaBotDirectoryItem {
     lastSeenAt: number;
     lastSeenAgoSeconds: number;
     deviceCount: number;
-    online: true;
+    online: boolean;
     name: string;
     goal: string;
 }

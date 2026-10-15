@@ -125,6 +125,11 @@ function createSponsorClient(overrides = {}) {
       if (overrides.commitError) throw overrides.commitError;
       return overrides.commitResult ?? { txId: COMMIT_TXID, txSize: 300, minerFee: 880, raw: {} };
     },
+    async getSponsorOrder(payload) {
+      calls.push(['getSponsorOrder', payload]);
+      if (overrides.getOrderError) throw overrides.getOrderError;
+      return overrides.orderResult ?? null;
+    },
   };
 }
 
@@ -431,9 +436,9 @@ test('writeMvcSponsorPin hard-fails on pre_rejected with feeAssist diagnostics',
   assert.equal(traffic.spendRecords.length, 0);
 });
 
-test('writeMvcSponsorPin hard-fails on commit_failed with the order id attached', async () => {
+test('writeMvcSponsorPin falls back to self-paid on commit_failed when the order did not broadcast', async () => {
   const sponsorClient = createSponsorClient({
-    commitError: sponsorError('broadcast rejected', {
+    commitError: sponsorError('broadcast rejected: txn-mempool-conflict', {
       code: 'mvc_fee_assist_commit_failed',
       stage: 'commit',
       reason: 'commit_failed',
@@ -442,27 +447,58 @@ test('writeMvcSponsorPin hard-fails on commit_failed with the order id attached'
   const traffic = createTrafficDeps();
   const { runSelfPaid, state: selfPaidState } = createSelfPaidWorker();
 
-  await assert.rejects(
-    writeMvcSponsorPin({
-      request: makeRequest(),
-      identity: makeIdentity(),
-      sponsorClient,
-      traffic,
-      runSelfPaid,
-      fetchUtxos: async () => [makeUtxo()],
-    }),
-    (error) => {
-      assert.equal(error.code, 'mvc_fee_assist_commit_failed');
-      assert.equal(error.data.feeAssist.used, false);
-      assert.equal(error.data.feeAssist.reason, 'commit_failed');
-      assert.equal(error.data.feeAssist.stage, 'commit');
-      assert.equal(error.data.feeAssist.orderId, 'order-1');
-      assert.equal(error.data.feeAssist.sponsoredMinerFee, 900);
-      return true;
-    },
-  );
-  assert.equal(selfPaidState.calls, 0);
+  const result = await writeMvcSponsorPin({
+    request: makeRequest(),
+    identity: makeIdentity(),
+    sponsorClient,
+    traffic,
+    runSelfPaid,
+    fetchUtxos: async () => [makeUtxo()],
+  });
+
+  assert.equal(selfPaidState.calls, 1);
+  assert.equal(result.feeAssist.used, false);
+  assert.equal(result.feeAssist.mode, 'self_paid');
+  assert.equal(result.feeAssist.reason, 'commit_failed');
+  assert.equal(result.feeAssist.stage, 'commit');
   assert.equal(traffic.spendRecords.length, 0);
+});
+
+test('writeMvcSponsorPin honors a broadcasted order after a commit failure', async () => {
+  const sponsorClient = createSponsorClient({
+    commitError: sponsorError('transport exploded after broadcast', {
+      code: 'mvc_fee_assist_commit_failed',
+      stage: 'commit',
+      reason: 'commit_failed',
+    }),
+    orderResult: {
+      orderId: 'order-1',
+      status: 'broadcasted',
+      txId: COMMIT_TXID,
+      txSize: 300,
+      minerFee: 880,
+      pending: false,
+      final: true,
+      raw: {},
+    },
+  });
+  const traffic = createTrafficDeps();
+  const { runSelfPaid, state: selfPaidState } = createSelfPaidWorker();
+
+  const result = await writeMvcSponsorPin({
+    request: makeRequest(),
+    identity: makeIdentity(),
+    sponsorClient,
+    traffic,
+    runSelfPaid,
+    fetchUtxos: async () => [makeUtxo()],
+  });
+
+  assert.equal(selfPaidState.calls, 0);
+  assert.equal(result.feeAssist.used, true);
+  assert.deepEqual(result.txids, [COMMIT_TXID]);
+  assert.equal(traffic.spendRecords.length, 1);
+  assert.ok(sponsorClient.calls.some(([name]) => name === 'getSponsorOrder'));
 });
 
 test('writeMvcSponsorPin recovers a lost commit response via the real client order recovery', async () => {

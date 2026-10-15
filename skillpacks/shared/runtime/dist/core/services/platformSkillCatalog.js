@@ -53,6 +53,18 @@ function selectRoleBinding(bindings, metaBotSlug, role) {
     });
     return candidates[0] ?? null;
 }
+function describeUnhealthyRuntime(runtime) {
+    const binary = runtime.binaryPath ? `, ${runtime.binaryPath}` : '';
+    const reason = runtime.healthReason ? `, ${runtime.healthReason}` : '';
+    return `${runtime.id} (${runtime.provider}, health ${runtime.health}${binary}${reason})`;
+}
+function healthyRuntimeHint(runtimes, currentId) {
+    const healthy = runtimes
+        .filter((entry) => entry.id !== currentId && isUsableRuntime(entry))
+        .slice(0, 3)
+        .map((entry) => entry.id);
+    return healthy.length ? ` Other healthy runtimes: ${healthy.join(', ')}.` : '';
+}
 function isUsableRuntime(runtime) {
     return Boolean(runtime
         && runtime.health === 'healthy'
@@ -251,10 +263,10 @@ function createPlatformSkillCatalog(options) {
                 return {
                     ok: false,
                     code: 'primary_runtime_unavailable',
-                    message: 'The selected MetaBot primary runtime is unavailable.',
+                    message: `The selected MetaBot primary runtime is unavailable: ${describeUnhealthyRuntime(runtime)}.${healthyRuntimeHint(runtimeState.runtimes, runtime.id)}`,
                     metaBotSlug,
                     runtime,
-                    binding: primaryBinding,
+                    binding,
                     rootDiagnostics: [],
                 };
             }
@@ -273,10 +285,10 @@ function createPlatformSkillCatalog(options) {
                 return {
                     ok: false,
                     code: 'primary_runtime_unavailable',
-                    message: 'The selected MetaBot primary runtime is not healthy.',
+                    message: `The selected MetaBot primary runtime is not healthy: ${describeUnhealthyRuntime(runtime)}.${healthyRuntimeHint(runtimeState.runtimes, runtime.id)}`,
                     metaBotSlug,
                     runtime,
-                    binding: primaryBinding,
+                    binding,
                     rootDiagnostics: [],
                 };
             }
@@ -284,10 +296,10 @@ function createPlatformSkillCatalog(options) {
                 return {
                     ok: false,
                     code: 'primary_runtime_unavailable',
-                    message: 'The selected MetaBot primary runtime has no binary path.',
+                    message: `The selected MetaBot primary runtime has no binary path: ${describeUnhealthyRuntime(runtime)}.${healthyRuntimeHint(runtimeState.runtimes, runtime.id)}`,
                     metaBotSlug,
                     runtime,
-                    binding: primaryBinding,
+                    binding,
                     rootDiagnostics: [],
                 };
             }

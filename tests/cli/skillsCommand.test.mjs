@@ -271,7 +271,8 @@ test('skills publish requires --dir and previews through the daemon without --co
       ['publish', '--dir', skillDir, '--from', 'test-profile'],
       { METABOT_DAEMON_BASE_URL: DAEMON_BASE_URL },
     );
-    assert.equal(preview.exitCode, 0);
+    // Awaiting confirmation exits 2: distinguishable from success (0).
+    assert.equal(preview.exitCode, 2);
     assert.equal(preview.result.ok, true);
     assert.equal(preview.result.state, 'awaiting_confirmation');
     assert.equal(preview.result.data.plan.name, 'publish-e2e-skill');

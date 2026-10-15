@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DAEMON_LOCK_TIMEOUT_CODE = exports.DAEMON_STALE_LOCK_RETENTION_MS = void 0;
 exports.createMetabotDaemon = createMetabotDaemon;
 const node_fs_1 = require("node:fs");
 const node_path_1 = __importDefault(require("node:path"));
@@ -15,6 +16,10 @@ const agentHookEndpoint_1 = require("../core/agents/agentHookEndpoint");
 const DAEMON_LOCK_BASE_DELAY_MS = 50;
 const DAEMON_LOCK_MAX_ATTEMPTS = 40;
 const DAEMON_LOCK_STALE_WITHOUT_PID_MS = 5_000;
+/** How long quarantined `daemon.lock.stale-*` files are kept for forensics. */
+exports.DAEMON_STALE_LOCK_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** Stable error code for losing the daemon lock race (concurrent auto-starts). */
+exports.DAEMON_LOCK_TIMEOUT_CODE = 'daemon_lock_timeout';
 function resolvePaths(input) {
     return typeof input === 'string' ? (0, paths_1.resolveMetabotPaths)(input) : input;
 }
@@ -61,6 +66,35 @@ async function quarantineStaleLock(lockPath) {
             throw error;
         }
     }
+}
+/**
+ * Best-effort sweep of quarantined lock files left by earlier stale-lock
+ * recoveries. They are forensic breadcrumbs, not state: once we hold the
+ * live lock, anything older than the retention window is safe to drop.
+ */
+async function sweepQuarantinedLocks(locksRoot, options = {}) {
+    const maxAgeMs = options.maxAgeMs ?? exports.DAEMON_STALE_LOCK_RETENTION_MS;
+    let entries;
+    try {
+        entries = await node_fs_1.promises.readdir(locksRoot);
+    }
+    catch {
+        return;
+    }
+    const now = Date.now();
+    await Promise.all(entries
+        .filter((entry) => entry.startsWith('daemon.lock.stale-'))
+        .map(async (entry) => {
+        try {
+            const stat = await node_fs_1.promises.stat(node_path_1.default.join(locksRoot, entry));
+            if (now - stat.mtimeMs > maxAgeMs) {
+                await node_fs_1.promises.rm(node_path_1.default.join(locksRoot, entry), { force: true });
+            }
+        }
+        catch {
+            // Best-effort housekeeping only.
+        }
+    }));
 }
 async function recoverStaleLock(lockPath) {
     const stat = await node_fs_1.promises.stat(lockPath);
@@ -130,6 +164,7 @@ function createMetabotDaemon(options) {
                     flag: 'wx',
                 });
                 lockHeld = true;
+                await sweepQuarantinedLocks(locksRoot).catch(() => undefined);
                 return;
             }
             catch (error) {
@@ -151,7 +186,12 @@ function createMetabotDaemon(options) {
                 await sleep(Math.min(DAEMON_LOCK_BASE_DELAY_MS * (attempt + 1), 250));
             }
         }
-        throw new Error(`Timed out acquiring daemon lock: ${lockPath}`);
+        // Losing the lock race (stop/start flapping, several CLIs auto-starting
+        // at once) is an expected outcome: carry a stable code so the serve
+        // entry can bow out with one clean line instead of an unhandled throw.
+        const error = new Error(`Timed out acquiring daemon lock: ${lockPath}`);
+        error.code = exports.DAEMON_LOCK_TIMEOUT_CODE;
+        throw error;
     }
     async function releaseLock() {
         if (!lockHeld)

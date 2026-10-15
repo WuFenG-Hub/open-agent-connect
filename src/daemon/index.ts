@@ -22,6 +22,10 @@ import {
 const DAEMON_LOCK_BASE_DELAY_MS = 50;
 const DAEMON_LOCK_MAX_ATTEMPTS = 40;
 const DAEMON_LOCK_STALE_WITHOUT_PID_MS = 5_000;
+/** How long quarantined `daemon.lock.stale-*` files are kept for forensics. */
+export const DAEMON_STALE_LOCK_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** Stable error code for losing the daemon lock race (concurrent auto-starts). */
+export const DAEMON_LOCK_TIMEOUT_CODE = 'daemon_lock_timeout';
 
 export interface MetabotDaemonAddress {
   host: string;
@@ -91,6 +95,34 @@ async function quarantineStaleLock(lockPath: string): Promise<void> {
       throw error;
     }
   }
+}
+
+/**
+ * Best-effort sweep of quarantined lock files left by earlier stale-lock
+ * recoveries. They are forensic breadcrumbs, not state: once we hold the
+ * live lock, anything older than the retention window is safe to drop.
+ */
+async function sweepQuarantinedLocks(locksRoot: string, options: { maxAgeMs?: number } = {}): Promise<void> {
+  const maxAgeMs = options.maxAgeMs ?? DAEMON_STALE_LOCK_RETENTION_MS;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(locksRoot);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  await Promise.all(entries
+    .filter((entry) => entry.startsWith('daemon.lock.stale-'))
+    .map(async (entry) => {
+      try {
+        const stat = await fs.stat(path.join(locksRoot, entry));
+        if (now - stat.mtimeMs > maxAgeMs) {
+          await fs.rm(path.join(locksRoot, entry), { force: true });
+        }
+      } catch {
+        // Best-effort housekeeping only.
+      }
+    }));
 }
 
 async function recoverStaleLock(lockPath: string): Promise<boolean> {
@@ -167,6 +199,7 @@ export function createMetabotDaemon(options: CreateMetabotDaemonOptions): Metabo
           flag: 'wx',
         });
         lockHeld = true;
+        await sweepQuarantinedLocks(locksRoot).catch(() => undefined);
         return;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -187,7 +220,12 @@ export function createMetabotDaemon(options: CreateMetabotDaemonOptions): Metabo
       }
     }
 
-    throw new Error(`Timed out acquiring daemon lock: ${lockPath}`);
+    // Losing the lock race (stop/start flapping, several CLIs auto-starting
+    // at once) is an expected outcome: carry a stable code so the serve
+    // entry can bow out with one clean line instead of an unhandled throw.
+    const error = new Error(`Timed out acquiring daemon lock: ${lockPath}`) as Error & { code?: string };
+    error.code = DAEMON_LOCK_TIMEOUT_CODE;
+    throw error;
   }
 
   async function releaseLock(): Promise<void> {

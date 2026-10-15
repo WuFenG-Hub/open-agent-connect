@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runCli = runCli;
+const node_path_1 = __importDefault(require("node:path"));
 const commandResult_1 = require("../core/contracts/commandResult");
+const daemon_1 = require("../daemon");
+const mvcPendingUtxos_1 = require("../core/chain/mvcPendingUtxos");
+const homeSelection_1 = require("../core/state/homeSelection");
+const paths_1 = require("../core/state/paths");
 const version_1 = require("./version");
-const daemon_1 = require("./commands/daemon");
+const daemon_2 = require("./commands/daemon");
 const doctor_1 = require("./commands/doctor");
 const identity_1 = require("./commands/identity");
 const user_1 = require("./commands/user");
@@ -49,9 +57,11 @@ const commandHelp_1 = require("./commandHelp");
 const types_1 = require("./types");
 const runtime_1 = require("./runtime");
 function resolveExitCode(result) {
-    if (result.ok)
+    if (result.ok && result.state === 'success')
         return 0;
-    if (result.state === 'waiting' || result.state === 'manual_action_required')
+    // Awaiting confirmation is a deliberate pause, not success: scripts must
+    // be able to tell "needs --confirm" apart from "done" (exit 0).
+    if (result.state === 'awaiting_confirmation' || result.state === 'waiting' || result.state === 'manual_action_required')
         return 2;
     return 1;
 }
@@ -73,6 +83,12 @@ function writeResolvedVersion(context, args) {
 async function runCli(argv, cliContext = {}) {
     const context = (0, types_1.createCliRuntimeContext)(cliContext);
     context.dependencies = (0, runtime_1.mergeCliDependencies)(context);
+    // Cross-process pending-UTXO journal: a wallet transfer in this CLI process
+    // must immediately constrain UTXO selection in the daemon (and vice versa)
+    // — explorer views lag several seconds behind a broadcast.
+    (0, mvcPendingUtxos_1.configurePendingMvcUtxoPersistence)({
+        journalPath: node_path_1.default.join((0, paths_1.resolveMetabotDaemonPaths)((0, homeSelection_1.normalizeSystemHomeDir)(context.env, context.cwd)).runtimeRoot, 'pending-mvc-utxos.json'),
+    });
     const [command, ...rest] = argv;
     let result;
     try {
@@ -103,7 +119,7 @@ async function runCli(argv, cliContext = {}) {
                     result = await (0, media_1.runMediaCommand)(rest, context);
                     break;
                 case 'daemon':
-                    result = await (0, daemon_1.runDaemonCommand)(rest, context);
+                    result = await (0, daemon_2.runDaemonCommand)(rest, context);
                     break;
                 case 'doctor':
                     result = await (0, doctor_1.runDoctorCommand)(rest, context);
@@ -227,6 +243,17 @@ if (require.main === module) {
         void (0, runtime_1.serveCliDaemonProcess)({
             env: process.env,
             cwd: process.cwd(),
+        }).catch((error) => {
+            // The serve process must never die on an unhandled rejection: daemon
+            // stop/start races and concurrent CLI auto-starts routinely lose the
+            // daemon lock, and a stack-trace crash hides that the winner is fine.
+            const code = error?.code;
+            if (code === daemon_1.DAEMON_LOCK_TIMEOUT_CODE) {
+                console.error('[daemon serve] another daemon holds the lock — leaving it running, this process exits.');
+                process.exit(0);
+            }
+            console.error('[daemon serve] failed:', error instanceof Error ? error.message : String(error));
+            process.exit(1);
         });
     }
     else {

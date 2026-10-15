@@ -53,6 +53,28 @@ test('due dates: yesterday waits for the staggered minute inside the window, cat
   assert.ok(caughtUp.dueDates.includes(dateAt(1)));
 });
 
+test('due dates: never due before the bot identity was created', () => {
+  const seed = 120;
+  const now = new Date(2026, 7, 20, 10, 0);
+  // Identity created 2026-08-19 23:30 — every lookback day except 08-19
+  // ended entirely before the bot existed.
+  const createdAt = getDayBoundsMs(dateAt(1)).endMs - 30 * 60 * 1000;
+  const result = computeDueDreamDates({
+    now,
+    staggerSeed: seed,
+    runStates: new Map(),
+    identityCreatedAtMs: createdAt,
+  });
+  assert.ok(!result.dueDates.includes(dateAt(2)));
+  assert.ok(!result.dueDates.includes(dateAt(3)));
+  // The creation day itself (08-19) overlapped the bot's existence: due.
+  assert.ok(result.dueDates.includes(dateAt(1)));
+
+  // Without the bound the same lookback would fabricate history.
+  const unbounded = computeDueDreamDates({ now, staggerSeed: seed, runStates: new Map() });
+  assert.ok(unbounded.dueDates.includes(dateAt(3)));
+});
+
 test('due dates: a whole-day completed run is final; a mid-day run re-dreams', () => {
   const date = dateAt(1);
   const dayEnd = getDayBoundsMs(date).endMs;

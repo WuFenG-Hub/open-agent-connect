@@ -36,6 +36,8 @@ export type PeerChatPublicKeyOutcome = {
 } | {
     status: 'absent';
 } | {
+    status: 'not_found';
+} | {
     status: 'unreachable';
     errors: string[];
 };
@@ -43,6 +45,14 @@ export declare function lookupPeerChatPublicKey(globalMetaId: string, options?: 
     chainApiBaseUrl?: string;
 }): Promise<PeerChatPublicKeyOutcome>;
 export declare function fetchPeerChatPublicKey(globalMetaId: string, options?: {
+    chainApiBaseUrl?: string;
+}): Promise<string | null>;
+/**
+ * Best-effort on-chain display name for a globalMetaId (the /info/name the
+ * MetaID gateways index). Cached because conversation listings re-ask for
+ * the same peers; never throws — a name is cosmetic, listing must not fail.
+ */
+export declare function lookupMetaIdDisplayName(globalMetaId: string, options?: {
     chainApiBaseUrl?: string;
 }): Promise<string | null>;
 export declare function rebuildTraceArtifactsFromSessionState(input: {

@@ -248,7 +248,9 @@ test('runCli dispatches `metabot wallet transfer` without --confirm and calls ha
     context,
   );
 
-  assert.equal(exitCode, 0);
+  // Awaiting confirmation is a deliberate pause, not success: scripts must
+  // be able to tell "needs --confirm" apart from "done".
+  assert.equal(exitCode, 2);
   assert.deepEqual(calls, [{ toAddress: '1EX5NN6npyCp3X6Sv4Yahv6DrBNKRtq4Gw', amountRaw: '0.00001BTC', confirm: false }]);
   const result = JSON.parse(stdout.join('').trim());
   assert.equal(result.ok, true);

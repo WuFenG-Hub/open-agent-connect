@@ -11,11 +11,15 @@
  *
  * Fallback semantics (IDBots parity): service_unavailable / no_user_utxo /
  * insufficient_quota / insufficient_traffic fall back to the regular
- * self-paid write (result carries feeAssist metadata); pre_rejected /
- * commit_failed are hard failures carrying feeAssist diagnostics on
- * error.data. In traffic mode, failure to resolve the traffic account is
- * also service_unavailable: do not continue with the legacy sponsor quota
- * path when the configured traffic interface is unavailable.
+ * self-paid write (result carries feeAssist metadata); pre_rejected remains
+ * a hard failure carrying feeAssist diagnostics on error.data. A commit
+ * failure whose sponsor order did not broadcast (broadcast errors like
+ * txn-mempool-conflict on the sponsor's fee inputs) also falls back to the
+ * MetaBot wallet: the drafted user inputs are journaled as pending-spent so
+ * the self-paid rebuild cannot double-spend them. In traffic mode, failure
+ * to resolve the traffic account is also service_unavailable: do not
+ * continue with the legacy sponsor quota path when the configured traffic
+ * interface is unavailable.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -34,7 +38,31 @@ function isFallbackReason(reason) {
     return reason === 'service_unavailable'
         || reason === 'no_user_utxo'
         || reason === 'insufficient_quota'
-        || reason === 'insufficient_traffic';
+        || reason === 'insufficient_traffic'
+        || reason === 'commit_failed';
+}
+/**
+ * After a commit failure, check whether the sponsor order actually
+ * broadcast anyway. Returns the committed txId when it did, null when it did
+ * not (or the status could not be determined — treat as not broadcast).
+ */
+async function resolveBroadcastedSponsorOrder(sponsorClient, orderId) {
+    try {
+        const order = await sponsorClient.getSponsorOrder?.({ orderId });
+        if (order?.final && order.status === 'broadcasted' && order.txId) {
+            return {
+                txId: order.txId,
+                ...(order.txSize !== undefined ? { txSize: order.txSize } : {}),
+                ...(order.minerFee !== undefined ? { minerFee: order.minerFee } : {}),
+                raw: order.raw,
+            };
+        }
+    }
+    catch {
+        // Status probe failed: the sponsor is unreachable, which is exactly the
+        // outage this fallback exists for.
+    }
+    return null;
 }
 function estimateDraftMinerFee(input) {
     const tx = new meta_contract_1.mvc.Transaction(input.unsignedTxHex);
@@ -220,17 +248,29 @@ async function writeMvcSponsorPin(input) {
             message: commitMessage,
         });
     }
-    catch (error) {
-        (0, feeAssist_1.attachFeeAssistError)({
-            error,
-            fallbackCode: 'mvc_fee_assist_commit_failed',
-            fallbackReason: 'commit_failed',
-            stage: 'commit',
-            orderId: pre.orderId,
-            quotaBefore,
-            advisoryFeeEstimate,
-            sponsoredMinerFee: pre.minerFee,
-        });
+    catch {
+        // The sponsor's broadcast is broken (e.g. txn-mempool-conflict on its
+        // fee inputs): unless the order actually landed, pay from the MetaBot
+        // wallet instead of stranding the write. The drafted user inputs are
+        // journaled as pending-spent first so the self-paid rebuild cannot
+        // double-spend them if the sponsor retries the order later.
+        const broadcasted = await resolveBroadcastedSponsorOrder(sponsorClient, pre.orderId);
+        if (broadcasted) {
+            commit = broadcasted;
+        }
+        else {
+            (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
+                address,
+                spentUtxos: draft.userInputs,
+                createdUtxos: [],
+            });
+            return fallbackToSelfPaid({
+                reason: 'commit_failed',
+                stage: 'commit',
+                quotaBefore,
+                advisoryFeeEstimate,
+            });
+        }
     }
     (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
         address,

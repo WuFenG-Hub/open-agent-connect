@@ -120,6 +120,18 @@ try {
   }
   if (hadDist) rmrf(oldDir);
 
+  // The package "bin" entrypoints must carry the executable bit: npm pack
+  // preserves file modes from this tree, and without it a tarball install
+  // yields `permission denied` on `metabot` / `oac` until a manual chmod.
+  for (const binEntry of ['cli/main.js', 'oac/main.js']) {
+    const binPath = path.join(distDir, binEntry);
+    try {
+      fs.chmodSync(binPath, 0o755);
+    } catch (error) {
+      fail(`could not chmod +x ${binEntry} (${error.message}) — bins would be uninstallable`);
+    }
+  }
+
   console.log(`[build-atomic] dist/ swapped in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 } finally {
   releaseLock();

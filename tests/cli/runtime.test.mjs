@@ -3454,7 +3454,8 @@ test('services call does not honor confirmed=true on natural-language cached pai
     { METABOT_CHAIN_API_BASE_URL: 'http://127.0.0.1:9' }
   );
 
-  assert.equal(called.exitCode, 0);
+  // Awaiting confirmation is a deliberate pause, not success: exit 2.
+  assert.equal(called.exitCode, 2);
   assert.equal(called.payload.ok, true);
   assert.equal(called.payload.state, 'awaiting_confirmation');
   assert.equal(called.payload.data.serviceName, '付费塔罗牌占卜');
@@ -3510,7 +3511,8 @@ test('paid confirm_paid_only service call returns confirmation preview before pa
     }
   );
 
-  assert.equal(called.exitCode, 0);
+  // Awaiting confirmation is a deliberate pause, not success: exit 2.
+  assert.equal(called.exitCode, 2);
   assert.equal(called.payload.ok, true);
   assert.equal(called.payload.state, 'awaiting_confirmation');
   assert.equal(called.payload.data.serviceName, 'Weather Oracle');

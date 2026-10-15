@@ -19,6 +19,29 @@ function estimateDraftMinerFee(input) {
     const outputTotal = tx.outputs.reduce((sum, output) => sum + Number(output.satoshis || 0), 0);
     return Math.max(0, input.userInputTotal - outputTotal);
 }
+/**
+ * After a commit failure, check whether the sponsor order actually
+ * broadcast anyway. Returns the committed result when it did, null when it
+ * did not (or the status could not be determined — treat as not broadcast).
+ */
+async function resolveBroadcastedSponsorOrder(client, orderId) {
+    try {
+        const order = await client.getSponsorOrder?.({ orderId });
+        if (order?.final && order.status === 'broadcasted' && order.txId) {
+            return {
+                txId: order.txId,
+                ...(order.txSize !== undefined ? { txSize: order.txSize } : {}),
+                ...(order.minerFee !== undefined ? { minerFee: order.minerFee } : {}),
+                raw: order.raw,
+            };
+        }
+    }
+    catch {
+        // Status probe failed: the sponsor is unreachable, which is exactly the
+        // outage this fallback exists for.
+    }
+    return null;
+}
 async function selfPaidDirect(input) {
     const direct = await (0, uploadFile_1.uploadLocalFileToChain)({
         filePath: input.filePath,
@@ -240,17 +263,34 @@ async function uploadMvcSponsorDirectFile(input) {
             message: commitMessage,
         });
     }
-    catch (error) {
-        (0, feeAssist_1.attachFeeAssistError)({
-            error,
-            fallbackCode: 'mvc_fee_assist_commit_failed',
-            fallbackReason: 'commit_failed',
-            stage: 'commit',
-            orderId: pre.orderId,
-            quotaBefore,
-            advisoryFeeEstimate: advisoryFeeEstimate,
-            sponsoredMinerFee: pre.minerFee,
-        });
+    catch {
+        // The sponsor's broadcast is broken (e.g. txn-mempool-conflict on its
+        // fee inputs): unless the order actually landed, pay from the wallet
+        // instead of stranding the upload. The drafted user inputs are
+        // journaled as pending-spent first so the self-paid rebuild cannot
+        // double-spend them if the sponsor retries the order later.
+        const broadcasted = await resolveBroadcastedSponsorOrder(input.mvcSponsorClient, pre.orderId);
+        if (broadcasted) {
+            commit = broadcasted;
+        }
+        else {
+            (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
+                address,
+                spentUtxos: draft.userInputs,
+                createdUtxos: [],
+            });
+            return fallbackSelfPaidForSponsorError({
+                error: { reason: 'commit_failed' },
+                filePath: input.filePath,
+                contentType: input.contentType,
+                network: input.network,
+                signer: input.signer,
+                fallbackReason: 'commit_failed',
+                stage: 'commit',
+                quotaBefore,
+                advisoryFeeEstimate: advisoryFeeEstimate,
+            });
+        }
     }
     (0, mvcPendingUtxos_1.rememberPendingMvcTransaction)({
         address,

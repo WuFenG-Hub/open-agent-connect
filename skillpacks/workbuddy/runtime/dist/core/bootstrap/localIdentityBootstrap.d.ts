@@ -30,4 +30,6 @@ export declare function createLocalIdentitySyncStep(input: {
     signer: Pick<Signer, 'writePin'>;
     wait?: (ms: number) => Promise<void>;
     stepDelayMs?: number;
+    chatPubkeyMaxRetries?: number;
+    chatPubkeyRetryDelayMs?: number;
 }): BootstrapSyncStep<BootstrapCreateRequest, RuntimeIdentityRecord>;

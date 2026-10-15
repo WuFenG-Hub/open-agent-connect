@@ -30,6 +30,9 @@ function requireHandler(context, key) {
 }
 /** Common `--chair <slug> --task <id>` pair used by most verbs. */
 function readTaskRefFlags(args) {
+    if (args.includes('--id')) {
+        return (0, commandResult_1.commandFailed)('invalid_flag', 'Unknown flag --id. Use --task <id> and --chair <bot-slug>.');
+    }
     const chair = normalizeText((0, helpers_1.readFlagValue)(args, '--chair'));
     if (!chair)
         return (0, helpers_1.commandMissingFlag)('--chair');

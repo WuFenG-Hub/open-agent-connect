@@ -17,15 +17,26 @@
  * gate entirely (H3).
  */
 import type { Signer } from '../signing/signer';
+export type GatedUploadResult = {
+    metafileUri: string;
+    pinId: string;
+    fileName?: string;
+    txids?: string[];
+    metawebUrl?: string;
+    totalCost?: number;
+    network?: string;
+    contentType?: string;
+    bytes?: number;
+    extension?: string;
+    globalMetaId?: string;
+    filePath?: string;
+};
 export type GatedUploadFn = (input: {
     slug: string;
     filePath: string;
     network?: string;
     contentType?: string;
-}) => Promise<{
-    metafileUri: string;
-    pinId: string;
-}>;
+}) => Promise<GatedUploadResult>;
 export type ProfileHomeResolver = (slug: string) => Promise<string | null>;
 export interface ProfileUploadGateOptions {
     /** Resolves a bot slug to its profile home dir. */
@@ -42,10 +53,7 @@ export interface ProfileUploadGateOptions {
         network?: string;
         contentType?: string;
         signer: Signer;
-    }) => Promise<{
-        metafileUri: string;
-        pinId: string;
-    }>;
+    }) => Promise<GatedUploadResult>;
     /** Signer factory; required unless `upload` is overridden. */
     signerForSlug?: (slug: string) => Promise<Signer>;
     log?: (message: string) => void;
@@ -53,7 +61,8 @@ export interface ProfileUploadGateOptions {
 export declare class UploadOutsideWorkspaceError extends Error {
     readonly filePath: string;
     readonly slug: string;
-    constructor(filePath: string, slug: string);
+    readonly allowedDir?: string | undefined;
+    constructor(filePath: string, slug: string, allowedDir?: string | undefined);
 }
 /**
  * Wrap a chain upload with the workspace gate. The workspace root is the

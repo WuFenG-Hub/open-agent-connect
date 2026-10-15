@@ -584,15 +584,15 @@ test('uploadMvcSponsorDirectFile hard-fails when pre reports insufficient quota'
   }
 });
 
-test('uploadMvcSponsorDirectFile fails explicitly after pre and does not call self-paid writePin', async () => {
+test('uploadMvcSponsorDirectFile falls back to self-paid after a commit failure when the order did not broadcast', async () => {
   const restore = patchMvcUtxos();
   try {
     const filePath = await tempFile('commit-fail.txt', 'commit fail');
-    let writePinCalled = false;
+    const writes = [];
     const sponsorClient = createSponsorClient({
       methods: {
         async commitSponsor() {
-          throw sponsorError('commit rejected', {
+          throw sponsorError('commit rejected: txn-mempool-conflict', {
             code: 'mvc_fee_assist_commit_failed',
             stage: 'commit',
             reason: 'commit_failed',
@@ -601,35 +601,39 @@ test('uploadMvcSponsorDirectFile fails explicitly after pre and does not call se
       },
     });
 
-    await assert.rejects(
-      () => uploadMvcSponsorDirectFile({
-        filePath,
-        fileName: 'commit-fail.txt',
-        contentType: 'text/plain',
-        bytes: Buffer.byteLength('commit fail'),
-        extension: '.txt',
-        network: 'mvc',
-        signer: fakeSigner({
-          writePin: async () => {
-            writePinCalled = true;
-            throw new Error('self-paid writePin should not be called');
-          },
-        }),
-        mvcSponsorClient: sponsorClient,
+    const result = await uploadMvcSponsorDirectFile({
+      filePath,
+      fileName: 'commit-fail.txt',
+      contentType: 'text/plain',
+      bytes: Buffer.byteLength('commit fail'),
+      extension: '.txt',
+      network: 'mvc',
+      signer: fakeSigner({
+        writePin: async (input) => {
+          writes.push(input);
+          return {
+            pinId: 'self-paid-pin',
+            txids: ['self-paid-tx'],
+            totalCost: 17,
+            network: input.network,
+            operation: 'create',
+            path: input.path,
+            contentType: input.contentType,
+            encoding: input.encoding,
+            globalMetaId: FIXTURE_GLOBAL_METAID,
+            mvcAddress: FIXTURE_ADDRESS,
+          };
+        },
       }),
-      (error) => {
-        assert.equal(error.code, 'mvc_fee_assist_commit_failed');
-        assert.equal(error.data.feeAssist.orderId, 'order-1');
-        assert.equal(error.data.feeAssist.stage, 'commit');
-        assert.equal(error.data.feeAssist.used, false);
-        assert.equal(error.data.feeAssist.sponsoredMinerFee, 900);
-        assert.equal(error.data.feeAssist.savedFee, 900);
-        assert.equal(typeof error.data.feeAssist.advisoryFeeEstimate, 'number');
-        assert.equal('savedMinerFee' in error.data.feeAssist, false);
-        return true;
-      },
-    );
-    assert.equal(writePinCalled, false);
+      mvcSponsorClient: sponsorClient,
+    });
+
+    assert.equal(writes.length, 1);
+    assert.equal(result.pinId, 'self-paid-pin');
+    assert.equal(result.feeAssist.mode, 'self_paid');
+    assert.equal(result.feeAssist.used, false);
+    assert.equal(result.feeAssist.reason, 'commit_failed');
+    assert.equal(result.feeAssist.stage, 'commit');
   } finally {
     restore();
   }

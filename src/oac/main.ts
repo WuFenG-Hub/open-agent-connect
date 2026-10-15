@@ -32,8 +32,10 @@ function resolveContext(context: OacContext = {}): ResolvedOacContext {
 }
 
 function resolveExitCode(result: MetabotCommandResult<unknown>): number {
-  if (result.ok) return 0;
-  if (result.state === 'waiting' || result.state === 'manual_action_required') return 2;
+  if (result.ok && result.state === 'success') return 0;
+  // Awaiting confirmation is a deliberate pause, not success: scripts must
+  // be able to tell "needs --confirm" apart from "done" (exit 0).
+  if (result.state === 'awaiting_confirmation' || result.state === 'waiting' || result.state === 'manual_action_required') return 2;
   return 1;
 }
 
