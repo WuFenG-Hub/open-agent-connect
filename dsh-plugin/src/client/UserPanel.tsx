@@ -300,6 +300,8 @@ export function UserPanel(injected: UserPanelInjected & { close: () => void; t: 
           runtime={setupCheck}
           t={injected.runtimeSetup.t}
           install={injected.runtimeSetup.install}
+          check={injected.runtimeSetup.check}
+          onProgress={setSetupCheck}
           onInstalled={() => { load() }}
         />
       ) : null}

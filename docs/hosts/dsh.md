@@ -36,9 +36,11 @@ start the first chat.
   in range, then nvm 20–24. Override the CLI entry with `OAC_METABOT_CLI_PATH`.
 - The OAC runtime (`open-agent-connect`, which provides the `metabot` CLI and
   daemon) is no longer a separate install step: when it is missing or older
-  than the plugin, the Bots page shows a first-run setup card that installs it
-  with one explicit click (`npm i -g open-agent-connect@latest` — never
-  silent; a copyable terminal command appears when npm lacks the permissions).
+  than the plugin, the plugin installs/upgrades it automatically in the
+  background at apply time (`npm i -g open-agent-connect@latest`), and the
+  Bots page shows the progress on the first-run setup card — no click, no
+  terminal. The card's button remains as an explicit retry after a failure,
+  and a copyable terminal command appears when npm lacks the permissions.
   Pre-installing it yourself (`npm i -g open-agent-connect@latest`) also works,
   and the plugin still resolves a sibling `../dist/cli/main.js` when you are
   developing from this repository.
@@ -48,15 +50,19 @@ start the first chat.
 On first open (and once per apply, cached) the plugin probes the runtime:
 CLI path, node binary, npm availability, and the runtime version against the
 plugin's own version (the two packages release in lockstep, so the runtime
-must be `>=` the plugin). The My Bots section then shows one card instead of
-scattered CLI errors:
+must be `>=` the plugin). A missing or stale runtime starts the guided npm
+install in the background right away — at most one automatic attempt per
+process — and the My Bots section shows one card instead of scattered CLI
+errors:
 
-- **Missing** — no runnable `metabot` CLI: an "Install runtime" button runs
-  the global npm install, re-resolves the CLI, and starts the daemon + binds
-  skills without a terminal.
-- **Stale** — runtime older than the plugin: same one-click upgrade.
+- **Missing** — no runnable `metabot` CLI: the automatic install runs
+  immediately; the card shows progress until the runtime turns ok, then the
+  daemon start + skill bind retry without a DSH restart.
+- **Stale** — runtime older than the plugin: same automatic upgrade.
 - **Manual** — no supported Node or no npm next to it: the card shows the
-  exact command to copy into a terminal instead of a button.
+  exact command to copy into a terminal instead. An automatic install that
+  fails (e.g. npm EPERM/EACCES) degrades to the same card with an explicit
+  retry button.
 
 A successful install also retries the Bot-preset reconcile so the new-session
 chip lists Bots without a DSH restart; a restart is still the clean way to
@@ -64,7 +70,7 @@ re-run the full apply.
 
 ## One-prompt install (let your Agent do it)
 
-The runtime installs itself from the Bots page on first run, so the manual
+The runtime installs itself in the background on first run, so the manual
 install is now a single command. You can still hand it to your local coding
 Agent; it diagnoses anything that fails on your machine and tells you when to
 restart:
@@ -77,8 +83,9 @@ Install the Open Agent Connect plugin for my DeepSeek Harness:
 If the command fails, diagnose and fix the environment (Node must be 20-24
 for the metabot CLI) and retry; ask me only if you cannot resolve it. Then
 tell me to restart the DSH desktop app and hard-refresh the browser - do not
-restart DSH yourself. After the restart, open the Bots page: if it shows a
-runtime setup card, click its install button and report the result.
+restart DSH yourself. After the restart, open the Bots page: the runtime
+installs/upgrades itself in the background; if the setup card reports a
+failure, click its retry button and report the result.
 ```
 
 For the `dsh web` profile, swap the command to
