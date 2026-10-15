@@ -14828,6 +14828,22 @@ export function createDefaultMetabotDaemonHandlers(input: {
           await notifyIdentityProfileRegistered();
           await ensureEmptyPersonaFiles(targetRuntimeStateStore.paths, normalizedName);
 
+          // Ensure traffic account is set up and bind all local bots.
+          // This guarantees new users default to traffic-mode for on-chain writes.
+          // Non-blocking: failure doesn't prevent identity creation, but logs warning.
+          try {
+            const targetTrafficService = createTrafficAccountService({
+              systemHomeDir: normalizedSystemHomeDir,
+            });
+            await targetTrafficService.ensureTrafficAccount();
+            const bindResult = await targetTrafficService.bindAllLocalBots();
+            if (bindResult.boundCount > 0) {
+              console.log(`[IdentityCreate] Bound ${bindResult.boundCount} bot(s) to traffic account`);
+            }
+          } catch (error) {
+            console.warn('[IdentityCreate] Traffic account setup failed:', error);
+          }
+
           try {
             const profile = await createMetabotProfileFromIdentity(normalizedSystemHomeDir, {
               name: nextState.identity.name,
