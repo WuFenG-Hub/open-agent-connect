@@ -59,6 +59,8 @@ const node_path_1 = __importDefault(require("node:path"));
 const node_child_process_1 = require("node:child_process");
 const node_net_1 = __importDefault(require("node:net"));
 const daemonStartupDiagnostics_1 = require("./daemonStartupDiagnostics");
+const claudeHookInstaller_1 = require("../core/agents/claudeHookInstaller");
+const agents_1 = require("./commands/agents");
 const version_1 = require("./version");
 const commandResult_1 = require("../core/contracts/commandResult");
 const configStore_1 = require("../core/config/configStore");
@@ -2245,6 +2247,7 @@ async function runDaemonStatusCommand(context) {
     }
 }
 function createDefaultCliDependencies(context) {
+    const agentsDir = node_path_1.default.join(normalizeSystemHomeDir(context.env, context.cwd), '.metabot', 'agents');
     async function requestJsonForSelectedActor(method, routePath, from, body) {
         const requestedFrom = normalizeEnvText(from);
         return requestJson(context, method, routePath, body && requestedFrom ? { ...body, from: requestedFrom } : body);
@@ -2814,6 +2817,11 @@ function createDefaultCliDependencies(context) {
                     creator?.globalMetaId ? `- publisher: ${creator.name || creator.globalMetaId} (${creator.globalMetaId})` : null,
                     pinId ? `- source pin: ${pinId}` : null,
                     `- package: ${contentReference}`,
+                    descriptor?.sha256
+                        ? `- package sha256: ${descriptor.sha256} (verified on download)`
+                        : pinId
+                            ? '- warning: the pin advertises no package sha256 — content cannot be verified (legacy pin; installed as-is)'
+                            : null,
                     `- target: ${sharedSkillsRoot()}/<name>/ (local disk only; rebinds installed hosts afterwards)`,
                     '',
                     'Re-run with --confirm to install.',
@@ -2832,6 +2840,7 @@ function createDefaultCliDependencies(context) {
                     ...(payloadName ? { payloadName } : {}),
                     ...(descriptor?.version ? { payloadVersion: descriptor.version } : {}),
                     ...(descriptor?.description ? { payloadDescription: descriptor.description } : {}),
+                    ...(descriptor?.sha256 ? { payloadSha256: descriptor.sha256 } : {}),
                 },
             });
             const rebind = input.noRebind === true ? 'skipped (--no-rebind)' : await rebindHostSkillRoots();
@@ -2842,6 +2851,7 @@ function createDefaultCliDependencies(context) {
             const formatted = [
                 `Installed skill "${installed.name}"${installed.version ? ` (v${installed.version})` : ''} → ${installed.skillDir}`,
                 installed.replaced ? `(replaced previous installation${installed.previousVersion ? ` v${installed.previousVersion}` : ''})` : null,
+                ...(installed.warnings ?? []).map((warning) => `Warning: ${warning}`),
                 '',
                 'Next steps:',
                 `- Read its instructions: metabot skills read --name ${installed.name}`,
@@ -3015,6 +3025,81 @@ function createDefaultCliDependencies(context) {
         };
     }
     return {
+        agents: {
+            async status(input) {
+                const baseUrl = await readReachableDaemonBaseUrl(context);
+                if (!baseUrl) {
+                    return (0, commandResult_1.commandFailed)('daemon_unreachable', 'No running MetaBot daemon found. Start it with `metabot daemon start`, then retry.');
+                }
+                const response = await fetch(`${baseUrl}/api/agents/status`);
+                const payload = await response.json();
+                if (!response.ok || payload.state !== 'success') {
+                    return (0, commandResult_1.commandFailed)('agents_status_failed', payload.message || `Agent status request failed (HTTP ${response.status}).`);
+                }
+                const rows = Array.isArray(payload.data?.agents) ? payload.data?.agents : [];
+                if (input.json)
+                    return (0, commandResult_1.commandSuccess)({ agents: rows });
+                return (0, commandResult_1.commandSuccess)({ agents: rows, formatted: (0, agents_1.renderAgentsStatusRows)(rows) });
+            },
+            async installHooks(input) {
+                if (input.host !== 'claude-code') {
+                    return (0, commandResult_1.commandFailed)('invalid_argument', `Unsupported --host value: ${input.host}.`);
+                }
+                const plan = await (0, claudeHookInstaller_1.planClaudeHookInstall)({ agentsDir });
+                if (!input.confirm) {
+                    return (0, commandResult_1.commandAwaitingConfirmation)({
+                        plan,
+                        formatted: [
+                            'Install managed Claude Code hooks so local sessions report status to this daemon.',
+                            `  settings: ${plan.settingsPath}${plan.settingsExisted ? '' : ' (will be created)'}`,
+                            `  events: ${plan.events.join(', ')}`,
+                            `  script: ${plan.scriptPath}`,
+                            'Existing user hooks are preserved; only entries referencing the managed script are touched.',
+                            '',
+                            'This writes into your Claude Code settings. Re-run with --confirm to install.',
+                        ].join('\n'),
+                    });
+                }
+                const result = await (0, claudeHookInstaller_1.installClaudeHooks)({ agentsDir });
+                return (0, commandResult_1.commandSuccess)({
+                    installed: result,
+                    formatted: [
+                        `Claude Code hooks installed into ${result.settingsPath} (events: ${result.events.join(', ')}).`,
+                        result.backupPath && result.changed ? `Backup written to ${result.backupPath}.` : '',
+                        'Start a Claude Code session; then `metabot agents status` shows it. Uninstall: `metabot agents hooks uninstall --host claude-code`.',
+                    ].filter(Boolean).join('\n'),
+                });
+            },
+            async uninstallHooks(input) {
+                if (input.host !== 'claude-code') {
+                    return (0, commandResult_1.commandFailed)('invalid_argument', `Unsupported --host value: ${input.host}.`);
+                }
+                const result = await (0, claudeHookInstaller_1.uninstallClaudeHooks)({ agentsDir });
+                return (0, commandResult_1.commandSuccess)({
+                    result,
+                    formatted: [
+                        `Managed Claude Code hooks removed from ${result.settingsPath}.`,
+                        result.removedScript ? 'Hook script removed.' : '',
+                    ].filter(Boolean).join('\n'),
+                });
+            },
+            async hooksDoctor(input) {
+                if (input.host !== 'claude-code') {
+                    return (0, commandResult_1.commandFailed)('invalid_argument', `Unsupported --host value: ${input.host}.`);
+                }
+                const report = await (0, claudeHookInstaller_1.doctorClaudeHooks)({ agentsDir });
+                const lines = [
+                    `settings: ${report.settingsPath}${report.settingsExisted ? '' : ' (missing)'}`,
+                    `hooks installed: ${report.installed ? `yes (${report.events.join(', ')})` : 'no'}`,
+                    `user hook events preserved: ${report.existingUserHookEvents.join(', ') || '(none)'}`,
+                    `hook script: ${report.scriptPresent ? report.scriptPath : 'missing'}`,
+                    `daemon endpoint: ${report.endpointPublished ? 'published' : 'not published (start the daemon)'}`,
+                ];
+                if (!report.installed)
+                    lines.push('', 'Install with: metabot agents hooks install --host claude-code --confirm');
+                return (0, commandResult_1.commandSuccess)({ report, formatted: lines.join('\n') });
+            },
+        },
         config: {
             get: async (input) => {
                 if (!isSupportedConfigKey(input.key)) {
@@ -5531,6 +5616,7 @@ function mergeCliDependencies(context) {
         ui: { ...defaults.ui, ...provided.ui },
         skills: { ...defaults.skills, ...provided.skills },
         host: { ...defaults.host, ...provided.host },
+        agents: provided.agents ?? defaults.agents,
         system: { ...defaults.system, ...provided.system },
         llm: { ...defaults.llm, ...provided.llm },
         bot: { ...defaults.bot, ...provided.bot },

@@ -96,12 +96,18 @@ async function resolveSkillPackageRoot(skillDir) {
         ? `Skill directory is ambiguous: multiple skill-bearing subdirectories under ${skillDir}.`
         : `No SKILL.md found in ${skillDir} — a metabot-skill package is a directory whose root (or single subdirectory) carries SKILL.md.`);
 }
-/** The canonical pin payload; only non-empty optional fields ride along. */
+/**
+ * The canonical pin payload; only non-empty optional fields ride along. The
+ * `sha256` binds the advertised archive content to the pin: installers refuse
+ * a download whose digest differs (pins published before the field existed
+ * install with a warning).
+ */
 function buildSkillPinPayload(input) {
     const payload = {
         name: input.name,
         version: input.version,
         'skill-file': input.skillFileUri,
+        sha256: input.sha256,
     };
     const description = normalizeText(input.description);
     if (description)
@@ -147,7 +153,7 @@ async function buildPlan(input, makeTempDir) {
             description,
             network: normalizeText(input.network).toLowerCase() || 'mvc',
             archive: { bytes: archive.bytes, sha256: archive.sha256, fileCount: archive.entries.length },
-            payload: buildSkillPinPayload({ name, version, description, skillFileUri: PREVIEW_PACKAGE_URI }),
+            payload: buildSkillPinPayload({ name, version, description, skillFileUri: PREVIEW_PACKAGE_URI, sha256: archive.sha256 }),
             warnings,
         },
         archivePath,
@@ -203,7 +209,7 @@ async function publishSkill(input, deps) {
             if (!skillFileUri || !skillFileUri.toLowerCase().startsWith('metafile://')) {
                 throw new SkillPublishError('publish_failed', `Skill package upload returned no metafile URI (pinId: ${uploadedPinId || '(none)'}).`);
             }
-            payload = buildSkillPinPayload({ name: plan.name, version: plan.version, description: plan.description, skillFileUri });
+            payload = buildSkillPinPayload({ name: plan.name, version: plan.version, description: plan.description, skillFileUri, sha256: plan.archive.sha256 });
             chainWrite = await deps.writeChain({
                 operation: 'create',
                 path: exports.SKILL_PROTOCOL_PATH,

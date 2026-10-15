@@ -1,10 +1,17 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createMetabotDaemon = createMetabotDaemon;
 const node_fs_1 = require("node:fs");
+const node_path_1 = __importDefault(require("node:path"));
 const node_crypto_1 = require("node:crypto");
 const httpServer_1 = require("./httpServer");
 const paths_1 = require("../core/state/paths");
+const agentStatusStore_1 = require("../core/agents/agentStatusStore");
+const claudeHookEvents_1 = require("../core/agents/claudeHookEvents");
+const agentHookEndpoint_1 = require("../core/agents/agentHookEndpoint");
 const DAEMON_LOCK_BASE_DELAY_MS = 50;
 const DAEMON_LOCK_MAX_ATTEMPTS = 40;
 const DAEMON_LOCK_STALE_WITHOUT_PID_MS = 5_000;
@@ -99,6 +106,14 @@ function createMetabotDaemon(options) {
     const locksRoot = daemonPaths?.locksRoot ?? paths.locksRoot;
     const lockPath = daemonPaths?.daemonLockPath ?? paths.daemonLockPath;
     const handlers = options.handlers ?? {};
+    const agentsDir = node_path_1.default.join(paths.metabotRoot, 'agents');
+    if (!handlers.agents) {
+        handlers.agents = {
+            store: (0, agentStatusStore_1.createAgentStatusStore)(),
+            token: (0, agentHookEndpoint_1.newAgentHookToken)(),
+            agentsDir,
+        };
+    }
     let server = null;
     let startedAddress = null;
     let lockHeld = false;
@@ -187,6 +202,20 @@ function createMetabotDaemon(options) {
                     port: address.port,
                     baseUrl: `http://${host}:${address.port}`,
                 };
+                // Publish the hook endpoint (fresh per-boot token) and replay hook
+                // events spooled while no daemon was listening.
+                await (0, agentHookEndpoint_1.writeAgentHookEndpointFile)(agentsDir, {
+                    port: address.port,
+                    token: handlers.agents.token,
+                    version: agentHookEndpoint_1.AGENT_HOOK_PROTOCOL_VERSION,
+                }).catch(() => undefined);
+                await (0, agentHookEndpoint_1.drainAgentHookSpool)((0, agentHookEndpoint_1.spoolDirPath)(agentsDir), (record) => {
+                    if (record.source !== 'claude-code')
+                        return;
+                    const event = (0, claudeHookEvents_1.normalizeClaudeHookPayload)(record.payload);
+                    if (event)
+                        handlers.agents.store.ingest(event);
+                }).catch(() => undefined);
                 return startedAddress;
             }
             catch (error) {

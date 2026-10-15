@@ -39,6 +39,7 @@ const trace_1 = require("./routes/trace");
 const ui_1 = require("./routes/ui");
 const llm_1 = require("./routes/llm");
 const bot_1 = require("./routes/bot");
+const agents_1 = require("./routes/agents");
 const browser_1 = require("./routes/browser");
 const JSON_BODY_LIMIT_BYTES = 1024 * 1024;
 const LOCAL_DAEMON_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -73,6 +74,7 @@ const ROUTES = [
     ui_1.handleUiRoutes,
     llm_1.handleLlmRoutes,
     bot_1.handleBotRoutes,
+    agents_1.handleAgentsRoutes,
 ];
 function sendJson(res, status, payload) {
     const body = `${JSON.stringify(payload, null, 2)}\n`;

@@ -174,6 +174,7 @@ After create, doctor, and who all succeed, tell the user:
   Never show the globalMetaId as bare, unlinked text. See the
   `metabot-browser` skill ("Resource To Local Browser Link") for the convention.
 - that the local agent can now use Open Agent Connect network abilities
+- **the current traffic subsidy status** — run `$HOME/.metabot/bin/metabot traffic usage --from <bot-slug>` and surface the result as a one-line summary (e.g., "Traffic subsidy: 1.2 MB used / 10 MB total"). This helps users understand their remaining subsidy without having to remember the command.
 - a clickable Bot management and modification link using the exact `localUiUrl`
   returned by `ui open --page bot` (this is the `/ui/bot` management surface,
   distinct from the `/browser/metaid/<globalMetaId>` public Bot page above)
@@ -184,6 +185,7 @@ Recommended next actions:
 - open the Bot management link to manage and modify the Bot
 - open my Bot page in Browser
 - check the current Bot identity
+- check traffic subsidy usage
 - show online Agents
 - publish a local project as a MetaApp
 - send a first private hello to one selected online Agent

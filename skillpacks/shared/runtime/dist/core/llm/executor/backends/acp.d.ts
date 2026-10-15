@@ -1,4 +1,5 @@
 import { type BlockedArgSpec, type LlmBackend } from './backend';
+import type { AcpDialect } from './acp-dialect';
 export interface AcpBackendOptions {
     provider: string;
     binaryPath: string;
@@ -11,7 +12,9 @@ export interface AcpBackendOptions {
     includeMcpServersInResume?: boolean;
     sendPromptContentAlias?: boolean;
     gateNotificationsUntilPrompt?: boolean;
-    normalizeToolName?: (toolName: string) => string;
+    /** Per-provider deviations; see acp-dialect.ts. */
+    dialect?: AcpDialect;
+    /** Inbound ndjson line cap; oversized lines are classified and rejected. */
+    maxLineBytes?: number;
 }
-export declare function hermesToolNameFromTitle(title: string | undefined, kind: string | undefined): string;
 export declare function createAcpBackend(options: AcpBackendOptions): LlmBackend;

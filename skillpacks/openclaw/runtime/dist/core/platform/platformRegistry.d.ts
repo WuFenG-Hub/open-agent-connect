@@ -1,6 +1,6 @@
 export type PlatformId = 'claude-code' | 'codex' | 'copilot' | 'opencode' | 'openclaw' | 'hermes' | 'gemini' | 'pi' | 'cursor' | 'kimi' | 'kiro' | 'codebuddy' | 'zcode' | 'workbuddy' | 'dsh' | 'grok-bot';
 export type RuntimePlatformId = PlatformId;
-export type PlatformExecutorKind = 'claude-stream-json' | 'codex-app-server' | 'copilot-json' | 'opencode-json' | 'openclaw-json' | 'acp-hermes' | 'gemini-stream-json' | 'pi-json' | 'cursor-stream-json' | 'acp-kimi' | 'acp-kiro' | 'codebuddy-stream-json' | 'zcode-json';
+export type PlatformExecutorKind = 'claude-stream-json' | 'codex-app-server' | 'copilot-json' | 'openclaw-json' | 'acp-hermes' | 'gemini-stream-json' | 'pi-json' | 'cursor-stream-json' | 'acp-kimi' | 'acp-kiro' | 'acp-opencode' | 'codebuddy-stream-json' | 'zcode-json';
 export interface PlatformDefinition {
     id: PlatformId;
     displayName: string;

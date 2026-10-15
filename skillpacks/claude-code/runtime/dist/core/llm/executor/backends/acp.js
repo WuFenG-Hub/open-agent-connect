@@ -1,16 +1,15 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.hermesToolNameFromTitle = hermesToolNameFromTitle;
 exports.createAcpBackend = createAcpBackend;
 const node_child_process_1 = require("node:child_process");
-const node_readline_1 = __importDefault(require("node:readline"));
 const backend_1 = require("./backend");
+const acp_ndjson_framer_1 = require("./acp-ndjson-framer");
+const acp_rpc_prefix_1 = require("./acp-rpc-prefix");
+const acp_write_queue_1 = require("./acp-write-queue");
 const jsonProcess_1 = require("./jsonProcess");
 const DEFAULT_ACP_TIMEOUT_MS = 1_200_000;
 const ACP_USAGE_KEY_FALLBACK = 'unknown';
+const ACP_DEBUG_LOG_LINE_MAX = 2000;
 function combineArgs(options, request) {
     return [
         ...options.baseArgs,
@@ -126,49 +125,8 @@ function parseToolArgs(argsText) {
         return { text: trimmed };
     }
 }
-function hermesToolNameFromTitle(title, kind) {
-    const safeTitle = title?.trim() ?? '';
-    if (safeTitle === 'execute code')
-        return 'execute_code';
-    const colonIndex = safeTitle.indexOf(':');
-    if (colonIndex > 0) {
-        const name = safeTitle.slice(0, colonIndex).trim();
-        if (name === 'terminal')
-            return 'terminal';
-        if (name === 'read')
-            return 'read_file';
-        if (name === 'write')
-            return 'write_file';
-        if (name.startsWith('patch'))
-            return 'patch';
-        if (name === 'search')
-            return 'search_files';
-        if (name === 'web search')
-            return 'web_search';
-        if (name === 'extract')
-            return 'web_extract';
-        if (name === 'delegate')
-            return 'delegate_task';
-        if (name === 'analyze image')
-            return 'vision_analyze';
-        return name;
-    }
-    switch (kind) {
-        case 'read':
-            return 'read_file';
-        case 'edit':
-            return 'write_file';
-        case 'execute':
-            return 'terminal';
-        case 'search':
-            return 'search_files';
-        case 'fetch':
-            return 'web_search';
-        case 'think':
-            return 'thinking';
-        default:
-            return safeTitle || kind || 'tool';
-    }
+function resolveAcpToolName(dialect, title, kind, name) {
+    return dialect?.toolNameFromCall?.({ title, kind, name }) || name || title || kind || 'tool';
 }
 function defaultProviderError(stderr) {
     const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -207,52 +165,90 @@ function createAcpBackend(options) {
             const childError = new Promise((resolve) => {
                 child.once('error', (error) => resolve(error));
             });
-            const writeJson = (message) => {
-                child.stdin.write(`${JSON.stringify(message)}\n`);
+            const maxLineBytes = options.maxLineBytes ?? acp_ndjson_framer_1.ACP_NDJSON_MAX_LINE_BYTES;
+            const writeQueue = new acp_write_queue_1.AcpWriteQueue(child.stdin);
+            let transportFailed;
+            const failTransport = (reason) => {
+                if (transportFailed)
+                    return;
+                transportFailed = reason;
+                writeQueue.close(new Error(reason));
+                for (const pendingRequest of pending.values()) {
+                    pendingRequest.reject(new Error(reason));
+                }
+                pending.clear();
+                try {
+                    child.kill('SIGTERM');
+                }
+                catch {
+                    // Best effort.
+                }
+            };
+            // An EPIPE on stdin means the agent is gone; without this listener the
+            // stream error would escape as an unhandled error and crash the host.
+            child.stdin.on('error', (error) => {
+                failTransport(`${options.provider} agent stdin failed: ${(0, backend_1.stringifyError)(error)}`);
+            });
+            const sendRecord = (record) => {
+                const line = `${JSON.stringify(record)}\n`;
+                if (Buffer.byteLength(line, 'utf8') > maxLineBytes) {
+                    return Promise.reject(new Error(`${options.provider} outgoing frame exceeded ${maxLineBytes} bytes`));
+                }
+                return writeQueue.write(line);
             };
             const requestRpc = (method, params) => {
                 const id = nextId;
                 nextId += 1;
                 return new Promise((resolve, reject) => {
                     pending.set(id, { method, resolve, reject });
-                    try {
-                        writeJson({ jsonrpc: '2.0', id, method, params });
-                    }
-                    catch (error) {
+                    sendRecord({ jsonrpc: '2.0', id, method, params }).catch((error) => {
+                        if (!pending.has(id))
+                            return;
                         pending.delete(id);
                         reject(error instanceof Error ? error : new Error((0, backend_1.stringifyError)(error)));
-                    }
+                    });
                 });
             };
             const handleAgentRequest = (message) => {
                 if (message.id === undefined)
                     return;
                 if (message.method === 'session/request_permission') {
-                    writeJson({
+                    // Unattended bot turns approve tool use; prefer an offered
+                    // allow-always option so the answer stays valid in the agent's own
+                    // vocabulary, and fall back to the historical fixed option id for
+                    // agents that offer no options to pick from.
+                    const params = (0, jsonProcess_1.isRecord)(message.params) ? message.params : {};
+                    const offered = (Array.isArray(params.options) ? params.options : []);
+                    const allowOption = offered.find((option) => (0, jsonProcess_1.isRecord)(option) && option.kind === 'allow_always')
+                        ?? offered.find((option) => (0, jsonProcess_1.isRecord)(option) && option.kind === 'allow_once');
+                    const optionId = allowOption && (0, jsonProcess_1.isRecord)(allowOption) && typeof allowOption.optionId === 'string'
+                        ? allowOption.optionId
+                        : 'approve_for_session';
+                    void sendRecord({
                         jsonrpc: '2.0',
                         id: message.id,
                         result: {
                             outcome: {
                                 outcome: 'selected',
-                                optionId: 'approve_for_session',
+                                optionId,
                             },
                         },
-                    });
+                    }).catch(() => { });
                     return;
                 }
-                writeJson({
+                void sendRecord({
                     jsonrpc: '2.0',
                     id: message.id,
                     error: { code: -32601, message: `method not found: ${message.method ?? 'unknown'}` },
-                });
+                }).catch(() => { });
             };
             const emitToolUse = (callId, tool, input) => {
-                emitter.emit({ type: 'tool_use', tool: options.normalizeToolName?.(tool) ?? tool, callId, input: input ?? {} });
+                emitter.emit({ type: 'tool_use', tool, callId, input: input ?? {} });
             };
-            const emitDeferredToolUse = (pendingTool, callId, title, kind, fallbackInput) => {
+            const emitDeferredToolUse = (pendingTool, callId, title, kind, name, fallbackInput) => {
                 if (pendingTool?.emitted)
                     return;
-                const toolName = pendingTool?.toolName ?? hermesToolNameFromTitle(title, kind);
+                const toolName = pendingTool?.toolName ?? resolveAcpToolName(options.dialect, title, kind, name);
                 const input = pendingTool?.input ?? parseToolArgs(pendingTool?.argsText) ?? fallbackInput;
                 emitToolUse(callId, toolName, input);
             };
@@ -262,7 +258,8 @@ function createAcpBackend(options) {
                 const callId = String(data.toolCallId ?? data.tool_call_id ?? data.id ?? 'tool');
                 const title = (0, jsonProcess_1.getString)(data.title) ?? (0, jsonProcess_1.getString)(data.name) ?? '';
                 const kind = (0, jsonProcess_1.getString)(data.kind) ?? '';
-                const toolName = hermesToolNameFromTitle(title, kind) || (0, jsonProcess_1.getString)(data.name) || 'tool';
+                const name = (0, jsonProcess_1.getString)(data.name) ?? '';
+                const toolName = resolveAcpToolName(options.dialect, title, kind, name);
                 const rawInput = (0, jsonProcess_1.isRecord)(data.rawInput)
                     ? data.rawInput
                     : (0, jsonProcess_1.isRecord)(data.input)
@@ -298,6 +295,7 @@ function createAcpBackend(options) {
                 pendingTools.delete(callId);
                 const title = (0, jsonProcess_1.getString)(data.title) ?? (0, jsonProcess_1.getString)(data.name) ?? '';
                 const kind = (0, jsonProcess_1.getString)(data.kind) ?? '';
+                const name = (0, jsonProcess_1.getString)(data.name) ?? '';
                 const rawInput = (0, jsonProcess_1.isRecord)(data.rawInput)
                     ? data.rawInput
                     : (0, jsonProcess_1.isRecord)(data.input)
@@ -305,8 +303,9 @@ function createAcpBackend(options) {
                         : (0, jsonProcess_1.isRecord)(data.parameters)
                             ? data.parameters
                             : undefined;
-                emitDeferredToolUse(pendingTool, callId, title, kind, rawInput);
-                const output = (0, jsonProcess_1.stringifyContent)(data.rawOutput ?? data.output ?? data.result) || extractToolCallText(data.content);
+                emitDeferredToolUse(pendingTool, callId, title, kind, name, rawInput);
+                const rawOutput = options.dialect?.normalizeToolResult?.(data.rawOutput) ?? data.rawOutput;
+                const output = (0, jsonProcess_1.stringifyContent)(rawOutput ?? data.output ?? data.result) || extractToolCallText(data.content);
                 emitter.emit({ type: 'tool_result', callId, output });
             };
             const handleNotification = (message) => {
@@ -316,10 +315,18 @@ function createAcpBackend(options) {
                 if (!(0, jsonProcess_1.isRecord)(message.params))
                     return;
                 const update = normalizeAcpUpdate(message.params.update);
-                if (!update.type)
-                    return;
                 if (options.gateNotificationsUntilPrompt && !promptStarted)
                     return;
+                if (!update.type) {
+                    // Vendor extensions and newer protocol kinds must not crash the
+                    // turn; log them so they stay observable instead of vanishing.
+                    const rawUpdate = message.params.update;
+                    const rawKind = (0, jsonProcess_1.isRecord)(rawUpdate)
+                        ? (0, jsonProcess_1.getString)(rawUpdate.sessionUpdate) ?? (0, jsonProcess_1.getString)(rawUpdate.type) ?? Object.keys(rawUpdate)[0] ?? ''
+                        : '';
+                    emitter.emit({ type: 'log', level: 'debug', message: `${options.provider} ignored session update kind: ${rawKind}` });
+                    return;
+                }
                 if (update.type === 'agent_message_chunk') {
                     const text = textFromContent(update.data);
                     if (text) {
@@ -359,18 +366,8 @@ function createAcpBackend(options) {
                 }
             };
             child.stdout.setEncoding('utf8');
-            const rl = node_readline_1.default.createInterface({ input: child.stdout });
-            rl.on('line', (line) => {
-                if (!line.trim())
-                    return;
-                let message;
-                try {
-                    message = JSON.parse(line);
-                }
-                catch {
-                    emitter.emit({ type: 'log', level: 'debug', message: line });
-                    return;
-                }
+            const handleRecord = (record) => {
+                const message = ((0, jsonProcess_1.isRecord)(record) ? record : {});
                 if (message.id !== undefined && message.method && message.result === undefined && message.error === undefined) {
                     handleAgentRequest(message);
                     return;
@@ -390,6 +387,58 @@ function createAcpBackend(options) {
                 }
                 if (message.method)
                     handleNotification(message);
+            };
+            const handleRejectedRecord = (rejected) => {
+                if (rejected.kind === 'invalid-json') {
+                    emitter.emit({ type: 'log', level: 'debug', message: rejected.line.slice(0, ACP_DEBUG_LOG_LINE_MAX) });
+                    return;
+                }
+                const classified = (0, acp_rpc_prefix_1.classifyAcpRecordPrefix)(rejected.prefix);
+                if (classified.kind === 'agent-request') {
+                    emitter.emit({
+                        type: 'log',
+                        level: 'debug',
+                        message: `${options.provider} dropped an oversized ${classified.method} request (${rejected.observedBytes} bytes > ${rejected.maxLineBytes})`,
+                    });
+                    void sendRecord({
+                        jsonrpc: '2.0',
+                        id: classified.id,
+                        error: { code: -32600, message: `request frame exceeds ${rejected.maxLineBytes} bytes` },
+                    }).catch(() => { });
+                    return;
+                }
+                if (classified.kind === 'response') {
+                    const pendingRequest = pending.get(classified.id);
+                    if (pendingRequest) {
+                        // The full frame is gone; settle this call now instead of letting
+                        // it hang until the turn timeout.
+                        pending.delete(classified.id);
+                        pendingRequest.reject(new Error(`${pendingRequest.method} response frame exceeded ${rejected.maxLineBytes} bytes (${rejected.observedBytes} bytes received)`));
+                    }
+                    else {
+                        emitter.emit({
+                            type: 'log',
+                            level: 'debug',
+                            message: `${options.provider} dropped an oversized response for unknown request id ${classified.id}`,
+                        });
+                    }
+                    return;
+                }
+                if (classified.kind === 'response-unknown') {
+                    // A response we cannot bind to a pending call would leave that call
+                    // hanging until the turn timeout; fail the transport instead.
+                    failTransport(`${options.provider} sent an oversized response frame that could not be bound to a request (${rejected.observedBytes} bytes)`);
+                    return;
+                }
+                emitter.emit({
+                    type: 'log',
+                    level: 'debug',
+                    message: `${options.provider} dropped an oversized frame (${rejected.observedBytes} bytes > ${rejected.maxLineBytes})`,
+                });
+            };
+            const framer = (0, acp_ndjson_framer_1.createBoundedNdjsonFramer)(handleRecord, handleRejectedRecord, { maxLineBytes });
+            child.stdout.on('data', (chunk) => {
+                framer.feed(chunk);
             });
             child.stderr.setEncoding('utf8');
             child.stderr.on('data', (chunk) => {
@@ -484,11 +533,12 @@ function createAcpBackend(options) {
                         throw new Error(`${options.provider} session/new returned no session ID`);
                 }
                 if (request.model) {
+                    const switchRequest = options.dialect?.setModelRequest?.(sessionId, request.model) ?? {
+                        method: 'session/set_model',
+                        params: { sessionId, modelId: request.model },
+                    };
                     try {
-                        await awaitStep(requestRpc('session/set_model', {
-                            sessionId,
-                            modelId: request.model,
-                        }), 'session/set_model');
+                        await awaitStep(requestRpc(switchRequest.method, switchRequest.params), switchRequest.method);
                     }
                     catch (error) {
                         finalStatus = 'failed';
@@ -534,6 +584,7 @@ function createAcpBackend(options) {
                 catch {
                     // Best effort.
                 }
+                writeQueue.close(new Error(`${options.provider} process closed`));
                 await (0, backend_1.shutdownChildProcess)(child, childExit, {
                     terminate: finalStatus !== 'completed',
                     graceMs: finalStatus === 'completed' ? 2_000 : 250,
