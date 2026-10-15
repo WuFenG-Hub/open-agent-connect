@@ -185,6 +185,11 @@ import { buildSessionTrace } from '../core/chat/sessionTrace';
 import type { SessionTraceProviderRuntimeInput, SessionTraceRecord } from '../core/chat/sessionTrace';
 import { exportSessionArtifacts } from '../core/chat/transcriptExport';
 import { sendPrivateChat } from '../core/chat/privateChat';
+import {
+  mergePrivateChatMessages,
+  mergeStoredPrivateChatsWithA2A,
+  peerGlobalMetaIdForConversation,
+} from '../core/chat/privateChatListing';
 import { loadChatPersona } from '../core/chat/chatPersonaLoader';
 import { createDefaultChatReplyRunner } from '../core/chat/defaultChatReplyRunner';
 import { createHostLlmChatReplyRunner } from '../core/chat/hostLlmChatReplyRunner';
@@ -6684,6 +6689,15 @@ export function createDefaultMetabotDaemonHandlers(input: {
       peerBot,
       messages,
     };
+  }
+
+  async function resolveActingBotSlug(rawFrom: unknown, homeDir: string): Promise<string> {
+    const requested = normalizeText(rawFrom);
+    if (requested) {
+      return requested;
+    }
+    const twinSlug = await resolveCurrentTwinSlug(normalizedSystemHomeDir).catch(() => null);
+    return normalizeText(twinSlug) || path.basename(homeDir);
   }
 
   async function resolveActorWriteContext(rawActor: unknown): Promise<
@@ -14202,7 +14216,11 @@ export function createDefaultMetabotDaemonHandlers(input: {
           // acting Bot's home; no request field can consent otherwise.
           for (const filePath of buzzAttachments) {
             if (path.isAbsolute(filePath) && !isPathInsideDir(filePath, actor.homeDir)) {
-              throw new UploadOutsideWorkspaceError(filePath, normalizeText(rawInput.from) || 'actor');
+              throw new UploadOutsideWorkspaceError(
+                filePath,
+                await resolveActingBotSlug(rawInput.from, actor.homeDir),
+                actor.homeDir,
+              );
             }
           }
           const buzzContentHash = stableChainWriteHash('buzz', [
@@ -14289,7 +14307,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
           const result = await publishSimpleNote(
             actor.signer,
             async ({ filePath, network: uploadNetwork }) => gatedUpload({
-              slug: normalizeText(rawInput.from) || 'actor',
+              slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
               filePath,
               network: uploadNetwork,
             }),
@@ -14352,7 +14370,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
           const result = await publishSimpleQuestion(
             actor.signer,
             async ({ filePath, network: uploadNetwork }) => gatedUpload({
-              slug: normalizeText(rawInput.from) || 'actor',
+              slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
               filePath,
               network: uploadNetwork,
             }),
@@ -14393,7 +14411,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
         if (!state.identity) {
           return commandFailed('identity_missing', 'Create a local MetaBot identity before publishing an answer.');
         }
-        const slug = normalizeText(rawInput.from) || 'actor';
+        const slug = await resolveActingBotSlug(rawInput.from, actor.homeDir);
         const questionPinId = normalizeText(rawInput.answerTo ?? rawInput.answer_to);
         try {
           const network = await resolveWriteNetworkForHome(rawInput.network, actor.homeDir);
@@ -14823,6 +14841,24 @@ export function createDefaultMetabotDaemonHandlers(input: {
         });
 
         const nextState = await targetRuntimeStateStore.readState();
+        if (nextState.identity && !(bootstrap.success || bootstrap.canSkip)) {
+          await registerIdentityProfile(nextState.identity, profileHomeDir);
+          await notifyIdentityProfileRegistered();
+          const slug = path.basename(profileHomeDir);
+          return commandFailed(
+            'identity_bootstrap_failed',
+            `${bootstrap.error ?? 'MetaBot identity bootstrap failed before the identity was ready.'} `
+            + `The local profile "${slug}" was saved. Retry setup with: metabot bot setup-retry --from ${slug}`,
+          );
+        }
+        if (!nextState.identity) {
+          const createdThisCall = !selectedProfile
+            && !existingIdentity
+            && path.resolve(profileHomeDir) !== path.resolve(input.homeDir);
+          if (createdThisCall) {
+            await fs.rm(profileHomeDir, { recursive: true, force: true }).catch(() => undefined);
+          }
+        }
         if (nextState.identity && (bootstrap.success || bootstrap.canSkip)) {
           await registerIdentityProfile(nextState.identity, profileHomeDir);
           await notifyIdentityProfileRegistered();
@@ -14939,8 +14975,8 @@ export function createDefaultMetabotDaemonHandlers(input: {
             total: presence.total,
             onlineWindowSeconds: presence.onlineWindowSeconds,
             bots: onlineOnly
-              ? presence.bots
-              : presence.bots.map((entry) => ({ ...entry })),
+              ? presence.bots.filter((entry) => entry.online)
+              : presence.bots,
           });
         } catch (error) {
           return commandFailed(
@@ -15743,7 +15779,6 @@ export function createDefaultMetabotDaemonHandlers(input: {
         if (
           plan.confirmation.requiresConfirmation
           && request.confirmed !== true
-          && (plan.confirmation.policyMode === 'confirm_paid_only' || plan.confirmation.policyMode === 'auto_when_safe')
         ) {
           const confirmRequest: Record<string, unknown> = {
             servicePinId: plan.service.servicePinId,
@@ -17789,7 +17824,27 @@ export function createDefaultMetabotDaemonHandlers(input: {
           return actor.failure;
         }
         const state = await actor.privateChatStateStore.readState();
-        return commandSuccess({ conversations: state.conversations });
+        const runtime = await actor.runtimeStateStore.readState();
+        const localGlobalMetaId = normalizeText(runtime.identity?.globalMetaId);
+        if (!localGlobalMetaId) {
+          return commandSuccess({ conversations: state.conversations });
+        }
+        try {
+          const listed = await listPeerConversationSummaries({
+            homeDir: actor.homeDir,
+            localGlobalMetaId,
+            limit: 100,
+          });
+          return commandSuccess({
+            conversations: mergeStoredPrivateChatsWithA2A({
+              localGlobalMetaId,
+              stored: state.conversations,
+              summaries: listed.conversations,
+            }),
+          });
+        } catch {
+          return commandSuccess({ conversations: state.conversations });
+        }
       },
 
       privateChatMessages: async (msgInput) => {
@@ -17797,13 +17852,55 @@ export function createDefaultMetabotDaemonHandlers(input: {
         if ('failure' in actor) {
           return actor.failure;
         }
-        const messages = await actor.privateChatStateStore.getRecentMessages(
-          normalizeText(msgInput.conversationId),
-          typeof msgInput.limit === 'number' && Number.isFinite(msgInput.limit)
-            ? Math.max(1, Math.trunc(msgInput.limit))
-            : 50,
-        );
-        return commandSuccess({ messages });
+        const conversationId = normalizeText(msgInput.conversationId);
+        const limit = typeof msgInput.limit === 'number' && Number.isFinite(msgInput.limit)
+          ? Math.max(1, Math.trunc(msgInput.limit))
+          : 50;
+        const stored = await actor.privateChatStateStore.getRecentMessages(conversationId, limit);
+        const runtime = await actor.runtimeStateStore.readState();
+        const localGlobalMetaId = normalizeText(runtime.identity?.globalMetaId);
+        if (!localGlobalMetaId) {
+          return commandSuccess({ messages: stored });
+        }
+        const chatState = await actor.privateChatStateStore.readState();
+        let summaries: Awaited<ReturnType<typeof listPeerConversationSummaries>>['conversations'] = [];
+        try {
+          summaries = (await listPeerConversationSummaries({
+            homeDir: actor.homeDir,
+            localGlobalMetaId,
+            limit: 100,
+          })).conversations;
+        } catch {
+          summaries = [];
+        }
+        const peerGlobalMetaId = peerGlobalMetaIdForConversation({
+          conversationId,
+          localGlobalMetaId,
+          stored: chatState.conversations,
+          summaries,
+        });
+        if (!peerGlobalMetaId) {
+          return commandSuccess({ messages: stored });
+        }
+        try {
+          const a2a = await readPeerConversationMessages({
+            homeDir: actor.homeDir,
+            localGlobalMetaId,
+            peerGlobalMetaId,
+            limit,
+          });
+          return commandSuccess({
+            messages: mergePrivateChatMessages({
+              conversationId,
+              localGlobalMetaId,
+              stored,
+              a2aMessages: a2a.messages,
+              limit,
+            }),
+          });
+        } catch {
+          return commandSuccess({ messages: stored });
+        }
       },
 
       privateFile: async (rawInput) => {
@@ -18337,7 +18434,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
             confirmExternalUpload: readInternalUploadConsent(rawInput.confirmExternalUpload),
           });
           const result = await gatedUpload({
-            slug: normalizeText(rawInput.from) || 'actor',
+            slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
             filePath: normalizeText(rawInput.filePath),
             network,
             ...(typeof rawInput.contentType === 'string' && rawInput.contentType.trim()
@@ -18372,7 +18469,11 @@ export function createDefaultMetabotDaemonHandlers(input: {
             // Probe-only invocation: refuses out-of-workspace paths before the
             // heavy upload machinery starts.
             upload: async () => ({ metafileUri: '', pinId: '' }),
-          })({ slug: 'actor', filePath: normalizeText(rawInput.filePath), network });
+          })({
+            slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
+            filePath: normalizeText(rawInput.filePath),
+            network,
+          });
           void gateCheck;
           const result = await uploadLargeFile({
             filePath: normalizeText(rawInput.filePath),

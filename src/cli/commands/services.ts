@@ -167,6 +167,13 @@ export async function runServicesCommand(args: string[], context: CliRuntimeCont
     const ownedSubcommand = args[1];
     const ownedArgs = args.slice(2);
 
+    if (!ownedSubcommand || ownedSubcommand.startsWith('-')) {
+      return commandFailed(
+        'missing_subcommand',
+        'Usage: metabot services owned list [--from <bot-slug> | --all]. Subcommands: list, orders, modify, revoke.',
+      );
+    }
+
     if (ownedSubcommand === 'list') {
       const handler = context.dependencies.services?.listOwned;
       if (!handler) {

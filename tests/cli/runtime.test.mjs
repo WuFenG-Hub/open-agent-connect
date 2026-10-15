@@ -2026,6 +2026,7 @@ test('services call with providerDaemonBaseUrl rejects a provider that is offlin
       providerDaemonBaseUrl: providerDaemon.payload.data.baseUrl,
       userTask: 'Do one tarot reading',
       taskContext: 'Offline provider gate coverage',
+      confirmed: true,
     },
   }), 'utf8');
 
@@ -2091,6 +2092,7 @@ test('provider closure runtime can publish, go online, receive a seller trace, a
       providerDaemonBaseUrl: providerDaemon.payload.data.baseUrl,
       userTask: 'Do one tarot reading',
       taskContext: 'Acceptance coverage for provider console closure',
+      confirmed: true,
     },
   }), 'utf8');
 
@@ -2310,6 +2312,7 @@ test('provider summary refreshes rating detail from chain and exposes rated sell
       providerDaemonBaseUrl: providerDaemon.payload.data.baseUrl,
       userTask: 'Do one tarot reading',
       taskContext: 'Acceptance coverage for provider rating closure',
+      confirmed: true,
     },
   }), 'utf8');
 
@@ -2849,6 +2852,7 @@ test('services call stores a trace that trace get can read back from the local r
       providerGlobalMetaId: created.payload.data.globalMetaId,
       userTask: 'Tell me tomorrow weather',
       taskContext: 'Shanghai tomorrow',
+      confirmed: true,
     },
   }), 'utf8');
 
@@ -2942,6 +2946,7 @@ test('services call returns an A2A start contract while provider execution flows
       providerDaemonBaseUrl: providerDaemon.payload.data.baseUrl,
       userTask: 'Tell me tomorrow weather',
       taskContext: 'Shanghai tomorrow',
+      confirmed: true,
     },
   }), 'utf8');
 
@@ -3102,6 +3107,7 @@ test('services call resolves a chain-discovered online service into a real MetaW
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3534,6 +3540,7 @@ test('services call rejects unsupported chain service payment before sending ord
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '2',
         currency: 'DOGE',
@@ -3576,6 +3583,7 @@ test('services call creates a refund request when a chain-discovered paid servic
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3636,6 +3644,7 @@ test('services call keeps a timed-out paid chain-discovered caller trace in refu
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3706,6 +3715,7 @@ test('trace get exposes refund pending state after a chain-discovered paid timeo
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3771,6 +3781,7 @@ test('trace get exposes a remote rating request when the provider later asks for
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3829,6 +3840,7 @@ test('services call auto-rates with ORDER_END after a provider NeedsRating reque
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
@@ -3918,6 +3930,7 @@ test('services rate publishes one buyer-side skill-service-rate record from a co
       providerGlobalMetaId: 'idq1provider',
       userTask: 'Tell me tomorrow weather',
       taskContext: 'User is in Shanghai',
+      confirmed: true,
       spendCap: {
         amount: '0.00002',
         currency: 'SPACE',
