@@ -80,7 +80,7 @@ test('createMetabotSubsidyStep persists claimed subsidy state after a successful
   assert.equal(state.identity.subsidyError, null);
 });
 
-test('createLocalIdentitySyncStep persists name first and retries chatpubkey without duplicating the name pin', async () => {
+test('createLocalIdentitySyncStep persists name first and auto-retries chatpubkey with canSkip=false on final failure', async () => {
   const homeDir = await createProfileHome('metabot-bootstrap-sync-');
   const runtimeStateStore = createRuntimeStateStore(homeDir);
   const secretStore = createFileSecretStore(homeDir);
@@ -102,7 +102,7 @@ test('createLocalIdentitySyncStep persists name first and retries chatpubkey wit
         calls.push(input.path);
         if (input.path === '/info/chatpubkey') {
           chatAttempts += 1;
-          if (chatAttempts === 1) {
+          if (chatAttempts <= 2) {
             throw new Error('indexer still catching up');
           }
         }
@@ -122,6 +122,8 @@ test('createLocalIdentitySyncStep persists name first and retries chatpubkey wit
     },
     wait: async () => {},
     stepDelayMs: 0,
+    chatPubkeyMaxRetries: 2,
+    chatPubkeyRetryDelayMs: 0,
   });
 
   const firstAttempt = await syncIdentityToChain({
@@ -131,25 +133,73 @@ test('createLocalIdentitySyncStep persists name first and retries chatpubkey wit
   });
   const stateAfterFirstAttempt = await runtimeStateStore.readState();
 
-  assert.equal(firstAttempt.success, false);
-  assert.equal(firstAttempt.canSkip, true);
+  // Should auto-retry 2 times (total 3 attempts), succeed on 3rd
+  assert.deepEqual(calls, ['/info/name', '/info/chatpubkey', '/info/chatpubkey', '/info/chatpubkey']);
+  assert.equal(firstAttempt.success, true);
   assert.equal(stateAfterFirstAttempt.identity.namePinId, '/info/name-pin-1');
-  assert.equal(stateAfterFirstAttempt.identity.chatPublicKeyPinId, null);
-  assert.equal(stateAfterFirstAttempt.identity.syncState, 'partial');
+  assert.equal(stateAfterFirstAttempt.identity.chatPublicKeyPinId, '/info/chatpubkey-pin-4');
+  assert.equal(stateAfterFirstAttempt.identity.syncState, 'synced');
+  assert.equal(stateAfterFirstAttempt.identity.syncError, null);
+});
 
-  const secondAttempt = await syncIdentityToChain({
+test('createLocalIdentitySyncStep fails with canSkip=false when chatpubkey exhausts retries', async () => {
+  const homeDir = await createProfileHome('metabot-bootstrap-sync-fail-');
+  const runtimeStateStore = createRuntimeStateStore(homeDir);
+  const secretStore = createFileSecretStore(homeDir);
+
+  const createMetabot = createLocalMetabotStep({
+    runtimeStateStore,
+    secretStore,
+    now: () => 1_744_444_444_000,
+    generateMnemonic: () => FIXTURE_MNEMONIC,
+  });
+  const created = await createMetabot({ name: 'Alice' });
+
+  const calls = [];
+  const syncIdentityToChain = createLocalIdentitySyncStep({
+    runtimeStateStore,
+    signer: {
+      writePin: async (input) => {
+        calls.push(input.path);
+        if (input.path === '/info/chatpubkey') {
+          throw new Error('persistent chain failure');
+        }
+        return {
+          pinId: `${input.path}-pin-${calls.length}`,
+          txids: [`${input.path}-tx-${calls.length}`],
+          totalCost: 1,
+          network: 'mvc',
+          operation: 'create',
+          path: input.path,
+          contentType: input.contentType,
+          encoding: input.encoding ?? 'utf-8',
+          globalMetaId: created.metabot.globalMetaId,
+          mvcAddress: created.metabot.mvcAddress,
+        };
+      },
+    },
+    wait: async () => {},
+    stepDelayMs: 0,
+    chatPubkeyMaxRetries: 2,
+    chatPubkeyRetryDelayMs: 0,
+  });
+
+  const result = await syncIdentityToChain({
     request: { name: 'Alice' },
-    metabot: stateAfterFirstAttempt.identity,
+    metabot: created.metabot,
     subsidy: { success: true },
   });
-  const stateAfterSecondAttempt = await runtimeStateStore.readState();
+  const state = await runtimeStateStore.readState();
 
-  assert.deepEqual(calls, ['/info/name', '/info/chatpubkey', '/info/chatpubkey']);
-  assert.equal(secondAttempt.success, true);
-  assert.equal(stateAfterSecondAttempt.identity.namePinId, '/info/name-pin-1');
-  assert.equal(stateAfterSecondAttempt.identity.chatPublicKeyPinId, '/info/chatpubkey-pin-3');
-  assert.equal(stateAfterSecondAttempt.identity.syncState, 'synced');
-  assert.equal(stateAfterSecondAttempt.identity.syncError, null);
+  // Should try 3 times (initial + 2 retries)
+  assert.deepEqual(calls, ['/info/name', '/info/chatpubkey', '/info/chatpubkey', '/info/chatpubkey']);
+  assert.equal(result.success, false);
+  assert.equal(result.canSkip, false);
+  assert.match(result.error, /Failed to sync chatPublicKey after 3 attempts/);
+  assert.equal(state.identity.namePinId, '/info/name-pin-1');
+  assert.equal(state.identity.chatPublicKeyPinId, null);
+  assert.equal(state.identity.syncState, 'failed');
+  assert.match(state.identity.syncError, /Failed to sync chatPublicKey after 3 attempts/);
 });
 
 test('ensureProfileWorkspace creates the required workspace files and eager runtime directories', async () => {
