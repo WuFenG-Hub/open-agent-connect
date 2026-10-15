@@ -6,6 +6,21 @@ import type { SystemHost } from '../core/system/types';
 import type { ScheduleChannel, ScheduleRunExecutor, ScheduleSpec } from '../core/schedule/store';
 export type Awaitable<T> = T | Promise<T>;
 export interface CliDependencies {
+    agents?: {
+        status: (input: {
+            json: boolean;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        installHooks: (input: {
+            host: string;
+            confirm: boolean;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        uninstallHooks: (input: {
+            host: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        hooksDoctor: (input: {
+            host: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+    };
     config?: {
         get?: (input: {
             from?: string;

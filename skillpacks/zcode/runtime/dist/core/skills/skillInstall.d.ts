@@ -2,7 +2,8 @@
  * On-chain skill package installation — OAC port of the IDBots
  * skillInstallService consumer half. A `metabot-skill` protocol pin points at
  * a zip package (`skill-file: metafile://<pinId>.zip`); this module downloads
- * that archive, extracts it safely, and installs it as a regular skill
+ * that archive, verifies it against the pin's `sha256` when present, extracts
+ * it safely, and installs it as a regular skill
  * directory under the shared skills root (`~/.metabot/skills/<name>/`),
  * recording provenance in the installed-skills registry so host skill
  * binding can pick it up like any local skill.
@@ -16,8 +17,8 @@ export declare const MAX_SKILL_PACKAGE_BYTES: number;
 /** Registry file inside the shared skills root; one entry per chain-installed skill. */
 export declare const SKILL_REGISTRY_FILENAME = "installed-skills.json";
 export declare class SkillInstallError extends Error {
-    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'name_conflict';
-    constructor(code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'name_conflict', message: string);
+    code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict' | 'install_locked';
+    constructor(code: 'invalid_source' | 'download_failed' | 'invalid_package' | 'digest_mismatch' | 'name_conflict' | 'install_locked', message: string);
 }
 export interface InstalledSkillRecord {
     name: string;
@@ -47,6 +48,8 @@ export interface SkillInstallSource {
     payloadName?: string;
     payloadVersion?: string;
     payloadDescription?: string;
+    /** Archive sha256 advertised by the source pin; verified after download. */
+    payloadSha256?: string;
 }
 export interface SkillInstallResult {
     name: string;
@@ -57,6 +60,8 @@ export interface SkillInstallResult {
     replaced: boolean;
     previousVersion: string | null;
     files: string[];
+    /** Non-fatal notices, e.g. a version downgrade replacing a newer install. */
+    warnings: string[];
 }
 /** Directory-safe skill name: must round-trip as a single path segment. */
 export declare function normalizeSkillName(value: unknown): string;
@@ -103,6 +108,8 @@ export declare function extractSkillPinDescriptor(pin: {
     description: string;
     version: string;
     skillFileUri: string;
+    /** Advertised archive sha256; empty on pins published before the field existed. */
+    sha256: string;
 } | null;
 /**
  * Download a skill package archive. `contentReference` is the pin payload's
@@ -114,14 +121,38 @@ export declare function downloadSkillArchive(input: {
     fetchImpl: typeof fetch;
     maxBytes?: number;
     timeoutMs?: number;
+    /** Archive sha256 advertised by the source pin; a mismatch refuses the install. */
+    expectedSha256?: string;
 }): Promise<Buffer>;
 export declare function readInstalledSkillsRegistry(skillsRoot: string): Promise<InstalledSkillsRegistry>;
+/**
+ * Write the registry atomically: a half-written file must never become the
+ * registry, because a corrupt read degrades to "nothing installed" and locks
+ * the user out of reinstalling (the on-disk dirs then count as foreign).
+ */
 export declare function writeInstalledSkillsRegistry(skillsRoot: string, registry: InstalledSkillsRegistry): Promise<void>;
+/**
+ * Remove interrupted-install leftovers under the skills root:
+ * - staging directories (`.skill-install-*`) from extractions that never
+ *   reached the swap — safe to delete;
+ * - registry temp files from atomic writes that never renamed;
+ * - swap trash (`.skill-trash/<name>`): when the skill never landed on the
+ *   main root the swap crashed between its two renames, so restore the
+ *   previous version (the registry still vouches for it); otherwise the new
+ *   version is in place and the trash is a post-swap cleanup leftover.
+ */
+export declare function sweepSkillInstallLeftovers(skillsRoot: string): Promise<{
+    removedStagingDirs: string[];
+    restoredSkills: string[];
+    removedTrashEntries: string[];
+}>;
 /**
  * Install an already-downloaded skill package archive under the shared skills
  * root. Existing installations of the same name are replaced in place (same
  * publisher or explicit override); a name owned by a different publisher or
- * by a non-registry local skill is a conflict, not a clobber.
+ * by a non-registry local skill is a conflict, not a clobber. The whole
+ * mutation runs under the per-root install lock, after sweeping leftovers
+ * from previously interrupted installs.
  */
 export declare function installSkillArchive(input: {
     skillsRoot: string;
@@ -130,7 +161,7 @@ export declare function installSkillArchive(input: {
     force?: boolean;
     now?: () => number;
 }): Promise<SkillInstallResult>;
-/** Full flow: download the package archive, then install it. */
+/** Full flow: download the package archive (verifying the pin's digest when advertised), then install it. */
 export declare function installSkillFromReference(input: {
     skillsRoot: string;
     contentReference: string;

@@ -183,6 +183,7 @@ exports.ROOT_COMMAND_HELP = {
         { name: 'schedule', summary: 'Scheduled tasks: create/list/update/delete, due/claim/complete, and run history.' },
         { name: 'surf', summary: 'MetaWeb surf (AI internet browsing): run reports, pre-dream toggle, and interaction budget.' },
         { name: 'twin', summary: 'Twin/Worker orchestration: current twin, worker roster, and delegation tasks.' },
+        { name: 'agents', summary: 'Show local agent CLI session status; manage the status-reporting hooks.' },
         { name: 'host', summary: 'Project shared MetaBot skills into one host-native skills root.' },
         { name: 'trace', summary: 'Watch or inspect structured remote delegation traces.' },
         { name: 'browser', summary: 'Open the dedicated Agent Internet Browser UI and optional deep links.' },
@@ -228,6 +229,40 @@ const COMMAND_HELP_SPECS = [
         successFields: ['profiles'],
         examples: ['metabot bot list'],
         optionalFlags: [HELP_JSON_FLAG],
+    },
+    {
+        commandPath: ['agents', 'status'],
+        summary: 'Show live status of local agent CLI sessions reporting through managed hooks.',
+        usage: 'metabot agents status [--json]',
+        examples: ['metabot agents status', 'metabot agents status --json'],
+        optionalFlags: [HELP_JSON_FLAG],
+    },
+    {
+        commandPath: ['agents', 'hooks', 'install'],
+        summary: 'Install managed hooks so a host CLI reports session status to this daemon (confirm-gated).',
+        usage: 'metabot agents hooks install --host <claude-code> [--confirm]',
+        requiredFlags: [
+            { flag: '--host', value: '<claude-code>', description: 'Host whose config receives the managed hook entries. Codex and OpenCode arrive in a later release.' },
+        ],
+        examples: ['metabot agents hooks install --host claude-code --confirm'],
+    },
+    {
+        commandPath: ['agents', 'hooks', 'uninstall'],
+        summary: 'Remove the managed hook entries (user hooks are preserved).',
+        usage: 'metabot agents hooks uninstall --host <claude-code>',
+        requiredFlags: [
+            { flag: '--host', value: '<claude-code>', description: 'Host to remove managed hook entries from.' },
+        ],
+        examples: ['metabot agents hooks uninstall --host claude-code'],
+    },
+    {
+        commandPath: ['agents', 'hooks', 'doctor'],
+        summary: 'Check the managed-hook install state for a host.',
+        usage: 'metabot agents hooks doctor --host <claude-code>',
+        requiredFlags: [
+            { flag: '--host', value: '<claude-code>', description: 'Host to inspect.' },
+        ],
+        examples: ['metabot agents hooks doctor --host claude-code'],
     },
     {
         commandPath: ['bot', 'show'],

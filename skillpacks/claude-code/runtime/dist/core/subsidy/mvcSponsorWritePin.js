@@ -13,7 +13,9 @@
  * insufficient_quota / insufficient_traffic fall back to the regular
  * self-paid write (result carries feeAssist metadata); pre_rejected /
  * commit_failed are hard failures carrying feeAssist diagnostics on
- * error.data.
+ * error.data. In traffic mode, failure to resolve the traffic account is
+ * also service_unavailable: do not continue with the legacy sponsor quota
+ * path when the configured traffic interface is unavailable.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -127,12 +129,33 @@ async function writeMvcSponsorPin(input) {
         path: identity.path,
         message: challenge.message,
     });
-    // Traffic-account billing: undefined keeps the legacy quota path (no
-    // account, unbound bot, or backend 404).
-    const trafficAccount = await traffic.resolveTrafficAccount({
-        botAddress: address,
-        challengeId: challenge.challengeId,
-    });
+    // Traffic-account billing is required while this flow is active. The
+    // resolver intentionally returns undefined when the traffic service is
+    // offline, the account cannot be ensured, or the bot cannot be bound. In
+    // traffic mode that is a sponsor outage, so use the MetaBot wallet instead
+    // of silently switching to the legacy sponsor quota path.
+    let trafficAccount;
+    try {
+        trafficAccount = await traffic.resolveTrafficAccount({
+            botAddress: address,
+            challengeId: challenge.challengeId,
+        });
+    }
+    catch (error) {
+        const reason = (0, feeAssist_1.normalizeSponsorReason)(error?.reason, 'service_unavailable');
+        if (isFallbackReason(reason)) {
+            return fallbackToSelfPaid({ reason, stage: 'pre', quotaBefore, advisoryFeeEstimate: estimatedMinerFee });
+        }
+        return fallbackToSelfPaid({ reason: 'service_unavailable', stage: 'pre', quotaBefore, advisoryFeeEstimate: estimatedMinerFee });
+    }
+    if (!trafficAccount) {
+        return fallbackToSelfPaid({
+            reason: 'service_unavailable',
+            stage: 'pre',
+            quotaBefore,
+            advisoryFeeEstimate: estimatedMinerFee,
+        });
+    }
     let pre;
     try {
         pre = await sponsorClient.preSponsor({
@@ -268,8 +291,9 @@ async function writeMvcSponsorPin(input) {
 /**
  * Build the signer's resolveSponsorWritePin hook bound to a shared traffic
  * account service. Returns null (unchanged self-paid behavior) unless the
- * stored traffic pin mode is 'traffic'; otherwise runs the sponsored flow
- * with a sponsor client pointed at the configured assist-service base URL.
+ * stored traffic pin mode is 'traffic'; otherwise returns null. When traffic
+ * mode is active but the account cannot be resolved, the write flow falls
+ * back to the MetaBot's own wallet before contacting the legacy quota path.
  */
 function createTrafficSponsorWritePinResolver(input) {
     const service = input.trafficAccountService;

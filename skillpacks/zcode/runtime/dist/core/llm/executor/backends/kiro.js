@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.kiroBackendFactory = void 0;
 exports.createKiroBackend = createKiroBackend;
 const acp_1 = require("./acp");
+const acp_dialect_1 = require("./acp-dialect");
 function normalizeKiroToolName(toolName) {
     let value = toolName.trim();
     const colonIndex = value.indexOf(':');
@@ -47,6 +48,11 @@ function normalizeKiroToolName(toolName) {
             return lower.replaceAll(' ', '_') || 'tool';
     }
 }
+// Kiro reports mixed-case human tool names on top of the shared title
+// vocabulary; lowercase them onto the canonical snake_case set.
+const KIRO_ACP_DIALECT = {
+    toolNameFromCall: ({ title, kind, name }) => normalizeKiroToolName((0, acp_dialect_1.acpToolNameFromTitle)(title, kind) || name || 'tool'),
+};
 function createKiroBackend(binaryPath, env) {
     return (0, acp_1.createAcpBackend)({
         provider: 'kiro',
@@ -63,7 +69,7 @@ function createKiroBackend(binaryPath, env) {
         includeMcpServersInResume: true,
         sendPromptContentAlias: true,
         gateNotificationsUntilPrompt: true,
-        normalizeToolName: normalizeKiroToolName,
+        dialect: KIRO_ACP_DIALECT,
     });
 }
 exports.kiroBackendFactory = createKiroBackend;

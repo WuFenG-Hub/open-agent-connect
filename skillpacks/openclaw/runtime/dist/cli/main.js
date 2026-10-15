@@ -33,6 +33,7 @@ const ui_1 = require("./commands/ui");
 const config_1 = require("./commands/config");
 const skills_1 = require("./commands/skills");
 const host_1 = require("./commands/host");
+const agents_1 = require("./commands/agents");
 const wallet_1 = require("./commands/wallet");
 const system_1 = require("./commands/system");
 const llm_1 = require("./commands/llm");
@@ -172,6 +173,9 @@ async function runCli(argv, cliContext = {}) {
                     break;
                 case 'skills':
                     result = await (0, skills_1.runSkillsCommand)(rest, context);
+                    break;
+                case 'agents':
+                    result = await (0, agents_1.runAgentsCommand)(rest, context);
                     break;
                 case 'host':
                     result = await (0, host_1.runHostCommand)(rest, context);

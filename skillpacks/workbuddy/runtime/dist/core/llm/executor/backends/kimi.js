@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.kimiBackendFactory = void 0;
 exports.createKimiBackend = createKimiBackend;
 const acp_1 = require("./acp");
+const acp_dialect_1 = require("./acp-dialect");
 function normalizeKimiToolName(toolName) {
     let value = toolName.trim();
     const colonIndex = value.indexOf(':');
@@ -43,6 +44,11 @@ function normalizeKimiToolName(toolName) {
             return lower.replaceAll(' ', '_') || 'tool';
     }
 }
+// Kimi reports mixed-case human tool names on top of the shared title
+// vocabulary; lowercase them onto the canonical snake_case set.
+const KIMI_ACP_DIALECT = {
+    toolNameFromCall: ({ title, kind, name }) => normalizeKimiToolName((0, acp_dialect_1.acpToolNameFromTitle)(title, kind) || name || 'tool'),
+};
 function createKimiBackend(binaryPath, env) {
     return (0, acp_1.createAcpBackend)({
         provider: 'kimi',
@@ -53,7 +59,7 @@ function createKimiBackend(binaryPath, env) {
             acp: { takesValue: false },
         },
         resumeMethod: 'session/resume',
-        normalizeToolName: normalizeKimiToolName,
+        dialect: KIMI_ACP_DIALECT,
     });
 }
 exports.kimiBackendFactory = createKimiBackend;

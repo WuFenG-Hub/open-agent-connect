@@ -93,12 +93,18 @@ export declare function resolveSkillPackageRoot(skillDir: string): Promise<{
     packageRoot: string;
     skillMdPath: string;
 }>;
-/** The canonical pin payload; only non-empty optional fields ride along. */
+/**
+ * The canonical pin payload; only non-empty optional fields ride along. The
+ * `sha256` binds the advertised archive content to the pin: installers refuse
+ * a download whose digest differs (pins published before the field existed
+ * install with a warning).
+ */
 export declare function buildSkillPinPayload(input: {
     name: string;
     version: string;
     description?: string;
     skillFileUri: string;
+    sha256: string;
 }): Record<string, string>;
 /**
  * Build the publish plan without writing anything: resolves the package root,

@@ -895,9 +895,11 @@ function createTrafficAccountService(deps) {
     // -------------------------------------------------------------------------
     /**
      * Build the trafficAccount block for a sponsor pre call, or return undefined
-     * to keep the legacy quota path. Never throws: traffic mode off, no identity,
-     * no account (backend 404 / offline), or an unbindable bot all degrade to
-     * undefined. Lazily ensures the account and binds the bot on first use.
+     * when traffic mode is off or the account cannot be resolved. Never throws:
+     * no identity, no account (backend 404 / offline), or an unbindable bot all
+     * degrade to undefined. Callers running in traffic mode must treat that as
+     * sponsor unavailability and fall back to the MetaBot wallet. Lazily ensures
+     * the account and binds the bot on first use.
      */
     async function resolveSponsorTrafficAccount(input) {
         try {

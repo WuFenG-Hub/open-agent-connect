@@ -160,9 +160,11 @@ exports.PLATFORM_DEFINITIONS = [
             versionArgs: ['--version'],
             authEnv: ['OPENCODE_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
             capabilities: DEFAULT_CAPABILITIES,
-            // Older OpenCode builds grow unbounded logs and fill the host disk
-            // (multica #8392); 1.1.54 is the fixed line.
-            minimumCliVersion: '1.1.54',
+            // The executor drives `opencode acp` (in-process on 1.x, via a private
+            // `opencode serve --stdio` child on 2.x); 1.18.31 is the oldest 1.x line
+            // verified to serve it, and older builds also grow unbounded logs and
+            // fill the host disk (multica #8392).
+            minimumCliVersion: '1.18.31',
         },
         skills: {
             roots: [
@@ -171,9 +173,9 @@ exports.PLATFORM_DEFINITIONS = [
             ],
         },
         executor: {
-            kind: 'opencode-json',
+            kind: 'acp-opencode',
             backendFactoryExport: 'opencodeBackendFactory',
-            launchCommand: 'opencode run --format json --dangerously-skip-permissions --dir <cwd>',
+            launchCommand: 'opencode acp',
             multicaReferencePath: 'agent/opencode.go',
         },
     },

@@ -12,7 +12,9 @@
  * insufficient_quota / insufficient_traffic fall back to the regular
  * self-paid write (result carries feeAssist metadata); pre_rejected /
  * commit_failed are hard failures carrying feeAssist diagnostics on
- * error.data.
+ * error.data. In traffic mode, failure to resolve the traffic account is
+ * also service_unavailable: do not continue with the legacy sponsor quota
+ * path when the configured traffic interface is unavailable.
  */
 import type { DerivedIdentity } from '../identity/deriveIdentity';
 import type { ChainWriteResult, NormalizedChainWriteRequest } from '../chain/writePin';
@@ -59,8 +61,9 @@ export declare function writeMvcSponsorPin(input: MvcSponsorWritePinInput): Prom
 /**
  * Build the signer's resolveSponsorWritePin hook bound to a shared traffic
  * account service. Returns null (unchanged self-paid behavior) unless the
- * stored traffic pin mode is 'traffic'; otherwise runs the sponsored flow
- * with a sponsor client pointed at the configured assist-service base URL.
+ * stored traffic pin mode is 'traffic'; otherwise returns null. When traffic
+ * mode is active but the account cannot be resolved, the write flow falls
+ * back to the MetaBot's own wallet before contacting the legacy quota path.
  */
 export declare function createTrafficSponsorWritePinResolver(input: {
     trafficAccountService: Pick<TrafficAccountService, 'getTrafficPinMode' | 'getConfiguredTrafficApiBase' | 'resolveSponsorTrafficAccount' | 'recordLocalTrafficSpend'>;

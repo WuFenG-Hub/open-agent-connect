@@ -26,6 +26,11 @@ export interface ServiceRefundSyncRequest {
     kind?: string;
 }
 export interface MetabotDaemonHttpHandlers {
+    agents?: {
+        store: import('../../core/agents/agentStatusStore').AgentStatusStore;
+        token: string;
+        agentsDir: string;
+    };
     browser?: BrowserHttpHandlers;
     config?: {
         get?: () => Awaitable<MetabotCommandResult<unknown>>;
