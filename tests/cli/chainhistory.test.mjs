@@ -76,6 +76,15 @@ test('chainhistory read record without a handler fails not_implemented', async (
   assert.equal(result.code, 'not_implemented');
 });
 
+test('chainhistory read without record explains the write command and recall', async () => {
+  const result = await runChainhistoryCommand(['read'], makeContext({}));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'missing_subcommand');
+  assert.match(result.message, /read record/);
+  assert.match(result.message, /chainhistory recall/);
+  assert.equal(result.message.includes('Unknown command'), false);
+});
+
 test('chainhistory read record rejects malformed invocations', async () => {
   const calls = [];
   const dependencies = {

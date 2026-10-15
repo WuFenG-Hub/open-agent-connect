@@ -15,6 +15,13 @@ const SUPPORTED_HOOK_HOSTS = ['claude-code'] as const;
 export async function runAgentsCommand(args: string[], context: CliRuntimeContext): Promise<MetabotCommandResult<unknown>> {
   const section = args[0];
 
+  if (!section || section.startsWith('--')) {
+    return commandFailed(
+      'missing_subcommand',
+      'Usage: metabot agents <status|hooks>. Commands: status, hooks install, hooks uninstall, hooks doctor.',
+    );
+  }
+
   if (section === 'status') {
     const handler = context.dependencies.agents?.status;
     if (!handler) return commandFailed('not_implemented', 'Agents status handler is not configured.');

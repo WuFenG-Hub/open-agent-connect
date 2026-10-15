@@ -63,13 +63,28 @@ function isAcceptedServiceResult(value: unknown, acceptedDuplicate: RegExp): boo
   return code !== null && acceptedDuplicate.test(readServiceMessage(value));
 }
 
+function readProcessingTime(value: unknown): number | null {
+  const response = readServiceResponse(value);
+  const time = response?.processingTime;
+  return typeof time === 'number' && Number.isFinite(time) ? time : null;
+}
+
+function isTransientAddressInitFailure(value: unknown, httpOk: boolean): boolean {
+  if (!httpOk) return false;
+  if (!/invalid connection/i.test(readServiceMessage(value))) return false;
+  const processingTime = readProcessingTime(value);
+  return processingTime !== null && processingTime >= 20_000;
+}
+
 function formatServiceFailure(
   stage: 'address-init' | 'address-reward',
   value: unknown,
   http?: { status: number; statusText: string },
+  request?: { url?: string; address?: string },
 ): string {
   const message = readServiceMessage(value);
   const code = readServiceCode(value);
+  const processingTime = readProcessingTime(value);
   const headline = message
     ? `${stage} failed: ${message}`
     : code !== null
@@ -83,7 +98,23 @@ function formatServiceFailure(
   if (message && code !== null) {
     extras.push(`service code ${code}`);
   }
-  return extras.length ? `${headline} (${extras.join(', ')})` : headline;
+  if (processingTime !== null) {
+    extras.push(`processingTime ${processingTime}ms`);
+  }
+  let text = extras.length ? `${headline} (${extras.join(', ')})` : headline;
+  if (request?.url || request?.address) {
+    const url = request.url ? ` ${request.url}` : '';
+    const address = request.address ? ` address ${request.address}` : '';
+    text += `. Request${url}${address} gasChain mvc. No mnemonic or signature is included.`;
+  }
+  if (
+    processingTime !== null
+    && processingTime >= 20_000
+    && /invalid connection/i.test(message)
+  ) {
+    text += ' The assist service held the request and returned data null, so this is an upstream connection failure, not a rejected local address.';
+  }
+  return text;
 }
 
 async function readSubsidyBody(response: {
@@ -140,30 +171,32 @@ export async function requestMvcGasSubsidy(
     gasChain: 'mvc',
   });
 
+  const initRequest = { url: addressInitUrl, address: mvcAddress };
   try {
-    const step1Response = await fetchImpl(addressInitUrl, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: requestBody,
-    });
-    const step1 = await readSubsidyBody(step1Response);
-    const step1Http = { status: step1Response.status, statusText: step1Response.statusText };
-
-    if (!step1Response.ok) {
-      return {
-        success: false,
-        step1,
-        error: formatServiceFailure('address-init', step1, step1Http),
-      };
+    let step1Response: Awaited<ReturnType<typeof fetchImpl>> | undefined;
+    let step1: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      step1Response = await fetchImpl(addressInitUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: requestBody,
+      });
+      step1 = await readSubsidyBody(step1Response);
+      const accepted = step1Response.ok && isAcceptedServiceResult(step1, /^address already init(?:ialized)?$/i);
+      if (accepted) break;
+      if (attempt === 2 || !isTransientAddressInitFailure(step1, step1Response.ok)) {
+        const step1Http = { status: step1Response.status, statusText: step1Response.statusText };
+        return {
+          success: false,
+          step1,
+          error: formatServiceFailure('address-init', step1, step1Http, initRequest),
+        };
+      }
     }
-    if (!isAcceptedServiceResult(step1, /^address already init(?:ialized)?$/i)) {
-      return {
-        success: false,
-        step1,
-        error: formatServiceFailure('address-init', step1, step1Http),
-      };
+    if (!step1Response) {
+      return { success: false, error: 'address-init failed: no response' };
     }
 
     if (!mnemonic) {

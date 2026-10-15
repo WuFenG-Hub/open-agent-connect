@@ -67,7 +67,13 @@ export async function runChainhistoryCommand(
   }
 
   if (subcommand === 'read') {
-    return commandUnknownSubcommand(`chainhistory read ${String(nested ?? '')}`.trim());
+    if (!nested) {
+      return commandFailed(
+        'missing_subcommand',
+        'Usage: metabot chainhistory read record --payload-file <path>. This records one read into the local ledger. To list reads, use metabot chainhistory recall.',
+      );
+    }
+    return commandUnknownSubcommand(`chainhistory read ${nested}`);
   }
 
   if (subcommand === 'recall') {

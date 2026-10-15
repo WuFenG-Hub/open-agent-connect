@@ -41,6 +41,12 @@ function requireHandler<K extends keyof GroupTaskDeps>(
 
 /** Common `--chair <slug> --task <id>` pair used by most verbs. */
 function readTaskRefFlags(args: string[]): { chair: string; taskId: number } | MetabotCommandResult<never> {
+  if (args.includes('--id')) {
+    return commandFailed(
+      'invalid_flag',
+      'Unknown flag --id. Use --task <id> and --chair <bot-slug>.',
+    );
+  }
   const chair = normalizeText(readFlagValue(args, '--chair'));
   if (!chair) return commandMissingFlag('--chair');
   const taskId = readIntFlag(args, '--task');

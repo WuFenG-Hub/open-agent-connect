@@ -1344,24 +1344,30 @@ test('default metaapp.publishProject refuses a project directory outside the Bot
     getDaemonRecord: () => null,
   });
 
+  const preview = await handlers.metaapp.publishProject({
+    projectDir: outsideRoot,
+    network: 'mvc',
+  });
+  assert.equal(preview.ok, true);
+  assert.equal(preview.state, 'awaiting_confirmation');
+  assert.match(preview.data.message, /--confirm/);
+  assert.match(preview.data.message, new RegExp(path.resolve(homeDir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(chainWrites, 0);
+
   const publishResult = await handlers.metaapp.publishProject({
     projectDir: outsideRoot,
     confirm: true,
     network: 'mvc',
   });
-  assert.equal(publishResult.ok, false);
-  assert.equal(publishResult.code, 'metaapp_project_dir_outside_workspace');
-  assert.match(publishResult.message, /outside the Bot workspace/);
+  assert.notEqual(publishResult.code, 'metaapp_project_dir_outside_workspace');
+  assert.notEqual(publishResult.state, 'awaiting_confirmation');
 
-  const updateResult = await handlers.metaapp.updateProject({
+  const updatePreview = await handlers.metaapp.updateProject({
     projectDir: outsideRoot,
     targetPinId: `${'b'.repeat(64)}i0`,
-    confirm: true,
     network: 'mvc',
   });
-  assert.equal(updateResult.ok, false);
-  assert.equal(updateResult.code, 'metaapp_project_dir_outside_workspace');
-  assert.equal(chainWrites, 0);
+  assert.equal(updatePreview.state, 'awaiting_confirmation');
 });
 
 test('default LLM handlers use the twin profile when actor selectors are omitted', async (t) => {

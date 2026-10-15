@@ -68,6 +68,20 @@ test('runCli dispatches `metabot traffic mode` get and set', async () => {
   ]);
 });
 
+test('runCli reads `metabot traffic mode --json` without treating --json as a mode', async () => {
+  const calls = [];
+  const traffic = {
+    getMode: async () => { calls.push(['getMode']); return success({ mode: 'selfpay' }); },
+    setMode: async (input) => { calls.push(['setMode', input]); return success(input); },
+  };
+
+  const result = await runTrafficCli(['mode', '--json'], traffic);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.payload.data.mode, 'selfpay');
+  assert.deepEqual(calls, [['getMode']]);
+});
+
 test('runCli rejects `metabot traffic mode <other>` as a usage error without a daemon call', async () => {
   const calls = [];
   const traffic = {

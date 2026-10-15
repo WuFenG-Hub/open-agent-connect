@@ -541,24 +541,31 @@ function readInternalUploadConsent(
 function checkMetaAppProjectDirContained(
   rawInput: Record<string, unknown>,
   actorHomeDir: string,
-): ReturnType<typeof commandFailed> | null {
+): MetabotCommandResult<unknown> | null {
   const requested = typeof rawInput.projectDir === 'string' ? rawInput.projectDir.trim() : '';
   const resolved = path.resolve(requested || '.');
-  if (!isPathInsideDir(resolved, actorHomeDir)) {
-    return commandFailed(
-      'metaapp_project_dir_outside_workspace',
-      `Refused to publish a project from outside the Bot workspace: ${resolved}. `
-      + 'On-chain publishing is irreversible; move or copy the project into the Bot workspace '
-      + `(${actorHomeDir}) and retry.`,
-    );
+  const outsideWorkspace = !isPathInsideDir(resolved, actorHomeDir);
+  if (outsideWorkspace && rawInput.confirm !== true) {
+    const verb = typeof rawInput.targetPinId === 'string' && rawInput.targetPinId.trim()
+      ? 'update-project'
+      : 'publish-project';
+    return commandAwaitingConfirmation({
+      projectDir: resolved,
+      botWorkspace: actorHomeDir,
+      confirmCommand: `metabot metaapp ${verb} --project-dir ${resolved} --confirm`,
+      message: `The project directory is outside the Bot workspace (${actorHomeDir}). `
+        + `Publishing ${resolved} is irreversible and may include secrets. `
+        + `Re-run the same command with --confirm to publish it directly, or copy it into the Bot workspace.`,
+    });
   }
   const manifestFile = typeof rawInput.manifestFile === 'string' ? rawInput.manifestFile.trim() : '';
   if (manifestFile) {
     const resolvedManifest = path.resolve(manifestFile);
-    if (!isPathInsideDir(resolvedManifest, actorHomeDir)) {
+    const manifestRoot = outsideWorkspace ? resolved : actorHomeDir;
+    if (!isPathInsideDir(resolvedManifest, manifestRoot)) {
       return commandFailed(
         'metaapp_project_dir_outside_workspace',
-        `Refused to read a manifest from outside the Bot workspace: ${resolvedManifest}. `
+        `Refused to read a manifest from outside the project directory: ${resolvedManifest}. `
         + 'Keep the manifest file inside the project directory.',
       );
     }
@@ -16426,9 +16433,12 @@ export function createDefaultMetabotDaemonHandlers(input: {
 
           // Return immediately — CLI will poll trace API for completion
           const daemon = input.getDaemonRecord();
+          const broadcastPin = orderPinId || serviceOrderPinId;
           return commandWaiting(
             'order_sent_awaiting_provider',
-            'Order sent to provider. Waiting for response...',
+            broadcastPin
+              ? `Order was broadcast (${broadcastPin}) but the provider has not answered yet. Continue with: metabot trace get --trace-id ${trace.traceId}`
+              : 'Order sent to provider. Waiting for response...',
             3000,
             {
               localUiUrl: buildConversationLocalUiUrl(daemon, state.identity?.globalMetaId, plan.service.providerGlobalMetaId)

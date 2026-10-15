@@ -300,6 +300,18 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     optionalFlags: [HELP_JSON_FLAG],
   },
   {
+    commandPath: ['agents'],
+    summary: 'Show local agent CLI session status and manage the status-reporting hooks.',
+    usage: 'metabot agents <status|hooks>',
+    subcommands: [
+      { name: 'status', summary: 'Show live status of local agent CLI sessions.' },
+      { name: 'hooks install', summary: 'Install managed status hooks for a host.' },
+      { name: 'hooks uninstall', summary: 'Remove managed status hooks for a host.' },
+      { name: 'hooks doctor', summary: 'Check managed-hook install state for a host.' },
+    ],
+    optionalFlags: [HELP_JSON_FLAG],
+  },
+  {
     commandPath: ['agents', 'status'],
     summary: 'Show live status of local agent CLI sessions reporting through managed hooks.',
     usage: 'metabot agents status [--json]',
@@ -1841,6 +1853,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     ],
     failureSemantics: [
       'Without --confirm, returns the rendered preview data plus payloadPreview JSON and does not write chain data.',
+      'A project directory outside the Bot workspace returns awaiting_confirmation until --confirm is passed. --confirm publishes that directory directly.',
       'Uses the file upload chain set; DOGE is not supported for file upload.',
       'Fails with not_implemented until a MetaApp publish-project handler is configured.',
     ],
@@ -1853,7 +1866,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
       FROM_BOT_FLAG,
       { flag: '--manifest-file', value: '<path>', description: 'Optional user-edited manifest JSON file.' },
       FILE_UPLOAD_CHAIN_FLAG,
-      { flag: '--confirm', description: 'Confirm the MetaApp upload and on-chain publish write.' },
+      { flag: '--confirm', description: 'Confirm the MetaApp upload and on-chain publish. Also required to publish a project directory outside the Bot workspace.' },
       METAAPP_OP_ID_FLAG,
       HELP_JSON_FLAG,
     ],
@@ -2878,6 +2891,21 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     optionalFlags: [HELP_JSON_FLAG],
   },
   {
+    commandPath: ['grouptask', 'detail'],
+    summary: 'Show one group task: members, deliverables, checkpoints, and messages.',
+    usage: 'metabot grouptask detail --chair <bot-slug> --task <id> [--view <view>] [--no-sync]',
+    requiredFlags: [
+      { flag: '--chair', value: '<bot-slug>', description: 'Chair Bot that owns the task.' },
+      { flag: '--task', value: '<id>', description: 'Task id from grouptask list. --id is not accepted.' },
+    ],
+    optionalFlags: [
+      { flag: '--view', value: '<view>', description: 'Optional detail view.' },
+      { flag: '--no-sync', description: 'Skip the chain sync before reading.' },
+      HELP_JSON_FLAG,
+    ],
+    examples: ['metabot grouptask detail --chair bob --task 328'],
+  },
+  {
     commandPath: ['metatask'],
     summary: 'MetaTask read verbs: replay the on-chain event set (both modes) from the shared projection cache.',
     usage: 'metabot metatask <subcommand>',
@@ -3354,7 +3382,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     summary: 'Per-Bot chain history ledger: on-chain reads and writes recorded under .runtime/chain-history/.',
     usage: 'metabot chainhistory <subcommand>',
     subcommands: [
-      { name: 'read', summary: 'Read-side ledger entries.' },
+      { name: 'read record', summary: 'Record one on-chain read into the local ledger. This writes an entry; list reads with chainhistory recall.' },
       { name: 'recall', summary: 'Search the Bot\'s own on-chain write/read history (the chain_history_recall backend).' },
       { name: 'summary', summary: 'Async summary drain: pending candidates and outcome application.' },
     ],

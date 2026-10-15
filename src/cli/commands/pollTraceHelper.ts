@@ -95,6 +95,9 @@ export async function pollTraceUntilComplete(input: PollTraceInput): Promise<Pol
     await sleep(intervalMs);
   }
 
-  input.stderr.write(`Provider has not responded yet. Continue tracking: ${input.localUiUrl}\n`);
+  input.stderr.write(
+    `The order was broadcast, but the provider has not answered yet. Continue with: metabot trace get --trace-id ${input.traceId}\n`,
+  );
+  input.stderr.write(`Continue tracking: ${input.localUiUrl}\n`);
   return { completed: false, terminalStatus: null };
 }

@@ -38,7 +38,7 @@ export async function runTrafficCommand(args: string[], context: CliRuntimeConte
   }
 
   if (subcommand === 'mode') {
-    const mode = args[1];
+    const mode = args.slice(1).find((arg) => arg !== '--json');
     if (mode === undefined) {
       return traffic?.getMode ? traffic.getMode() : trafficNotImplemented('mode');
     }

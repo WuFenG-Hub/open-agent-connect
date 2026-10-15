@@ -68,7 +68,12 @@ test('requestMvcGasSubsidy rejects an address-init business failure before rewar
   ], calls);
 
   assert.equal(result.success, false);
-  assert.equal(result.error, 'address-init failed: init funding unavailable (HTTP 200 OK, service code 1)');
+  assert.equal(
+    result.error,
+    'address-init failed: init funding unavailable (HTTP 200 OK, service code 1). '
+    + 'Request https://assist.example/address-init address 1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA gasChain mvc. '
+    + 'No mnemonic or signature is included.',
+  );
   assert.equal(calls.length, 1);
 });
 
@@ -98,6 +103,33 @@ test('requestMvcGasSubsidy exposes HTTP status and service code for an address-i
   assert.match(result.error, /service code 7/);
 });
 
+test('requestMvcGasSubsidy retries a slow invalid connection once and then reports the upstream failure', async () => {
+  const calls = [];
+  const result = await createRequest([
+    jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
+    jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
+  ], calls);
+
+  assert.equal(result.success, false);
+  assert.equal(calls.length, 2);
+  assert.match(result.error, /processingTime 30018ms/);
+  assert.match(result.error, /address 1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA/);
+  assert.match(result.error, /upstream connection failure/);
+  assert.equal(result.error.includes('abandon'), false);
+});
+
+test('requestMvcGasSubsidy completes address-init after one transient invalid connection', async () => {
+  const calls = [];
+  const result = await createRequest([
+    jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
+    jsonResponse({ code: 0, message: 'success', data: { txid: 'init-tx' } }),
+    jsonResponse({ code: 0, message: 'success', data: { txid: 'reward-tx' } }),
+  ], calls);
+
+  assert.equal(result.success, true);
+  assert.equal(calls.length, 3);
+});
+
 test('requestMvcGasSubsidy preserves service context for HTTP failures', async () => {
   const result = await createRequest([
     jsonResponse(
@@ -109,6 +141,8 @@ test('requestMvcGasSubsidy preserves service context for HTTP failures', async (
   assert.equal(result.success, false);
   assert.equal(
     result.error,
-    'address-init failed: Auth verified signature err (HTTP 401 Unauthorized, service code 2)',
+    'address-init failed: Auth verified signature err (HTTP 401 Unauthorized, service code 2). '
+    + 'Request https://assist.example/address-init address 1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA gasChain mvc. '
+    + 'No mnemonic or signature is included.',
   );
 });
