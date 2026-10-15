@@ -8,6 +8,7 @@ const {
 } = require('../../dist/core/subsidy/requestMvcGasSubsidy.js');
 
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const ADDRESS = '1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA';
 
 function jsonResponse(body, options = {}) {
   return {
@@ -17,69 +18,114 @@ function jsonResponse(body, options = {}) {
     async json() {
       return body;
     },
+    async text() {
+      return JSON.stringify(body);
+    },
   };
 }
 
-function createRequest(responses, calls = []) {
+function challengeResponse() {
+  return jsonResponse({
+    code: 0,
+    message: 'success',
+    data: {
+      challengeId: 'ch-1',
+      message: 'assist-mvc-reward:ch-1:1',
+      expiresAt: 1,
+    },
+  });
+}
+
+function createRequest(responses, calls = [], options = {}) {
   return requestMvcGasSubsidy({
-    mvcAddress: '1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA',
-    mnemonic: MNEMONIC,
+    mvcAddress: ADDRESS,
+    mnemonic: options.mnemonic === undefined ? MNEMONIC : options.mnemonic,
     path: "m/44'/10001'/0'/0/0",
   }, {
     addressInitUrl: 'https://assist.example/address-init',
     addressRewardUrl: 'https://assist.example/address-reward',
+    rewardChallengeUrl: 'https://assist.example/reward-challenge',
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), init });
-      return responses.shift();
+      const response = responses.shift();
+      if (!response) {
+        throw new Error(`unexpected request ${url}`);
+      }
+      return response;
     },
-    wait: async () => {},
+    wait: options.wait ?? (async () => {}),
+    ...(options.waitMs !== undefined ? { waitMs: options.waitMs } : {}),
   });
 }
 
-test('requestMvcGasSubsidy accepts successful business responses', async () => {
+function readBody(call) {
+  return JSON.parse(call.init.body);
+}
+
+test('requestMvcGasSubsidy claims gas with a reward challenge and does not call address-init', async () => {
   const calls = [];
+  const waits = [];
   const result = await createRequest([
-    jsonResponse({ code: 0, message: 'success', data: { txid: 'init-tx' } }),
-    jsonResponse({ code: 0, message: 'success', data: { txid: 'reward-tx' } }),
-  ], calls);
+    challengeResponse(),
+    jsonResponse({ code: 0, message: 'success', data: { txId: 'reward-tx', amount: 500000 } }),
+  ], calls, {
+    wait: async (ms) => { waits.push(ms); },
+  });
 
   assert.equal(result.success, true);
   assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, 'https://assist.example/reward-challenge');
+  assert.equal(calls[1].url, 'https://assist.example/address-reward');
+  assert.deepEqual(readBody(calls[0]), { address: ADDRESS, gasChain: 'mvc' });
+  const rewardBody = readBody(calls[1]);
+  assert.equal(rewardBody.address, ADDRESS);
+  assert.equal(rewardBody.gasChain, 'mvc');
+  assert.equal(rewardBody.challengeId, 'ch-1');
+  assert.equal(typeof rewardBody.publicKey, 'string');
+  assert.equal(rewardBody.publicKey.length > 0, true);
+  assert.equal(typeof rewardBody.signature, 'string');
+  assert.equal(rewardBody.signature.length > 0, true);
+  assert.equal(JSON.stringify(rewardBody).includes('abandon'), false);
+  assert.equal(calls[1].init.headers['X-Public-Key'], rewardBody.publicKey);
+  assert.equal(typeof calls[1].init.headers['X-Signature'], 'string');
+  assert.equal(calls[1].init.headers['X-Signature'].length > 0, true);
+  assert.deepEqual(waits, [5000]);
   assert.deepEqual(result.step2, {
     code: 0,
     message: 'success',
-    data: { txid: 'reward-tx' },
+    data: { txId: 'reward-tx', amount: 500000 },
   });
 });
 
-test('requestMvcGasSubsidy permits idempotent duplicate responses', async () => {
-  const result = await createRequest([
-    jsonResponse({ code: 1, message: 'address already init', data: null }),
-    jsonResponse({ code: 1, message: 'address already rewarded', data: null }),
-  ]);
-
-  assert.equal(result.success, true);
-});
-
-test('requestMvcGasSubsidy rejects an address-init business failure before reward', async () => {
+test('requestMvcGasSubsidy treats an already-rewarded challenge as subsidy success', async () => {
   const calls = [];
   const result = await createRequest([
-    jsonResponse({ code: 1, message: 'init funding unavailable', data: null }),
+    jsonResponse({ code: 1, message: 'address already rewarded', data: null }),
+  ], calls);
+
+  assert.equal(result.success, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://assist.example/reward-challenge');
+});
+
+test('requestMvcGasSubsidy rejects a reward-challenge business failure before address-init', async () => {
+  const calls = [];
+  const result = await createRequest([
+    jsonResponse({ code: 1, message: 'reward funding unavailable', data: null }),
   ], calls);
 
   assert.equal(result.success, false);
   assert.equal(
     result.error,
-    'address-init failed: init funding unavailable (HTTP 200 OK, service code 1). '
-    + 'Request https://assist.example/address-init address 1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA gasChain mvc. '
-    + 'No mnemonic or signature is included.',
+    'reward-challenge failed: reward funding unavailable (HTTP 200 OK, service code 1)',
   );
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://assist.example/reward-challenge');
 });
 
 test('requestMvcGasSubsidy rejects an address-reward business failure returned with HTTP 200', async () => {
   const result = await createRequest([
-    jsonResponse({ code: 0, message: 'success', data: { txid: 'init-tx' } }),
+    challengeResponse(),
     jsonResponse({ code: 1, message: 'asset utxo list is empty', data: null }),
   ]);
 
@@ -92,21 +138,25 @@ test('requestMvcGasSubsidy rejects an address-reward business failure returned w
   });
 });
 
-test('requestMvcGasSubsidy exposes HTTP status and service code for an address-init invalid connection', async () => {
+test('requestMvcGasSubsidy falls back to one address-init attempt when reward-challenge is missing', async () => {
+  const calls = [];
   const result = await createRequest([
+    jsonResponse({ message: '404 page not found' }, { ok: false, status: 404, statusText: 'Not Found' }),
     jsonResponse({ code: 7, message: 'invalid connection', data: null }),
-  ]);
+  ], calls);
 
   assert.equal(result.success, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, 'https://assist.example/address-init');
   assert.match(result.error, /address-init failed: invalid connection/);
   assert.match(result.error, /HTTP 200/);
   assert.match(result.error, /service code 7/);
 });
 
-test('requestMvcGasSubsidy retries a slow invalid connection once and then reports the upstream failure', async () => {
+test('requestMvcGasSubsidy does not repeat a slow address-init invalid connection', async () => {
   const calls = [];
   const result = await createRequest([
-    jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
+    jsonResponse({ message: '404 page not found' }, { ok: false, status: 404, statusText: 'Not Found' }),
     jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
   ], calls);
 
@@ -118,20 +168,23 @@ test('requestMvcGasSubsidy retries a slow invalid connection once and then repor
   assert.equal(result.error.includes('abandon'), false);
 });
 
-test('requestMvcGasSubsidy completes address-init after one transient invalid connection', async () => {
+test('requestMvcGasSubsidy keeps the legacy init plus reward flow when reward-challenge is missing', async () => {
   const calls = [];
   const result = await createRequest([
-    jsonResponse({ code: 1, message: 'invalid connection', data: null, processingTime: 30018 }),
-    jsonResponse({ code: 0, message: 'success', data: { txid: 'init-tx' } }),
-    jsonResponse({ code: 0, message: 'success', data: { txid: 'reward-tx' } }),
+    jsonResponse({ message: '404 page not found' }, { ok: false, status: 404, statusText: 'Not Found' }),
+    jsonResponse({ code: 1, message: 'address already init', data: null }),
+    jsonResponse({ code: 1, message: 'address already rewarded', data: null }),
   ], calls);
 
   assert.equal(result.success, true);
   assert.equal(calls.length, 3);
+  assert.deepEqual(readBody(calls[2]), { address: ADDRESS, gasChain: 'mvc' });
+  assert.equal(calls[2].init.body.includes('challengeId'), false);
 });
 
-test('requestMvcGasSubsidy preserves service context for HTTP failures', async () => {
+test('requestMvcGasSubsidy preserves service context for HTTP failures on the legacy init path', async () => {
   const result = await createRequest([
+    jsonResponse({ message: '404 page not found' }, { ok: false, status: 404, statusText: 'Not Found' }),
     jsonResponse(
       { code: 2, message: 'Auth verified signature err', data: null },
       { ok: false, status: 401, statusText: 'Unauthorized' },

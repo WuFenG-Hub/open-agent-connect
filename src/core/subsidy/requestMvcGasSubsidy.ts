@@ -4,6 +4,7 @@ import { signMvcAddressMessage } from './mvcMessageSigning';
 
 const DEFAULT_ADDRESS_INIT_URL = 'https://www.metaso.network/assist-open-api/v1/assist/gas/mvc/address-init';
 const DEFAULT_ADDRESS_REWARD_URL = 'https://www.metaso.network/assist-open-api/v1/assist/gas/mvc/address-reward';
+const DEFAULT_REWARD_CHALLENGE_URL = 'https://www.metaso.network/assist-open-api/v2/assist/gas/mvc/reward-challenge';
 const DEFAULT_SUBSIDY_WAIT_MS = 5_000;
 const CREDENTIAL_MESSAGE = 'metaso.network';
 
@@ -25,6 +26,7 @@ export interface RequestMvcGasSubsidyResult {
 export interface RequestMvcGasSubsidyDependencies {
   addressInitUrl?: string;
   addressRewardUrl?: string;
+  rewardChallengeUrl?: string;
   fetchImpl?: typeof fetch;
   wait?: (ms: number) => Promise<void>;
   waitMs?: number;
@@ -69,15 +71,8 @@ function readProcessingTime(value: unknown): number | null {
   return typeof time === 'number' && Number.isFinite(time) ? time : null;
 }
 
-function isTransientAddressInitFailure(value: unknown, httpOk: boolean): boolean {
-  if (!httpOk) return false;
-  if (!/invalid connection/i.test(readServiceMessage(value))) return false;
-  const processingTime = readProcessingTime(value);
-  return processingTime !== null && processingTime >= 20_000;
-}
-
 function formatServiceFailure(
-  stage: 'address-init' | 'address-reward',
+  stage: 'address-init' | 'address-reward' | 'reward-challenge',
   value: unknown,
   http?: { status: number; statusText: string },
   request?: { url?: string; address?: string },
@@ -142,6 +137,137 @@ async function readSubsidyBody(response: {
   return { message: 'unreadable body' };
 }
 
+function readChallengePayload(value: unknown): { challengeId: string; message: string } | null {
+  const response = readServiceResponse(value);
+  const data = response?.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const challengeId = typeof record.challengeId === 'string' ? record.challengeId.trim() : '';
+  const message = typeof record.message === 'string' ? record.message.trim() : '';
+  if (!challengeId || !message) return null;
+  return { challengeId, message };
+}
+
+function isMissingRoute(status: number): boolean {
+  return status === 404 || status === 405;
+}
+
+async function postJson(
+  fetchImpl: typeof fetch,
+  url: string,
+  body: string,
+  headers: Record<string, string> = {},
+): Promise<{ response: Awaited<ReturnType<typeof fetch>>; body: unknown }> {
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...headers,
+    },
+    body,
+  });
+  return { response, body: await readSubsidyBody(response) };
+}
+
+async function claimMvcRewardWithChallenge(input: {
+  fetchImpl: typeof fetch;
+  rewardChallengeUrl: string;
+  addressRewardUrl: string;
+  mvcAddress: string;
+  mnemonic: string;
+  derivationPath: string;
+  wait: (ms: number) => Promise<void>;
+  waitMs: number;
+}): Promise<RequestMvcGasSubsidyResult | null> {
+  let challenge: { response: Awaited<ReturnType<typeof fetch>>; body: unknown };
+  try {
+    challenge = await postJson(
+      input.fetchImpl,
+      input.rewardChallengeUrl,
+      JSON.stringify({ address: input.mvcAddress, gasChain: 'mvc' }),
+    );
+  } catch {
+    return null;
+  }
+  if (isMissingRoute(challenge.response.status)) return null;
+
+  const challengeHttp = {
+    status: challenge.response.status,
+    statusText: challenge.response.statusText,
+  };
+  if (!challenge.response.ok) {
+    return {
+      success: false,
+      step1: challenge.body,
+      error: formatServiceFailure('reward-challenge', challenge.body, challengeHttp),
+    };
+  }
+  if (
+    readServiceCode(challenge.body) !== 0
+    && isAcceptedServiceResult(challenge.body, /^address already rewarded$/i)
+  ) {
+    return { success: true, step1: challenge.body };
+  }
+  if (readServiceCode(challenge.body) !== 0) {
+    return {
+      success: false,
+      step1: challenge.body,
+      error: formatServiceFailure('reward-challenge', challenge.body, challengeHttp),
+    };
+  }
+  const payload = readChallengePayload(challenge.body);
+  if (!payload) {
+    return {
+      success: false,
+      step1: challenge.body,
+      error: formatServiceFailure('reward-challenge', challenge.body, challengeHttp),
+    };
+  }
+
+  const credential = await signMvcAddressMessage({
+    mnemonic: input.mnemonic,
+    path: input.derivationPath,
+    message: CREDENTIAL_MESSAGE,
+  });
+  const challengeSignature = await signMvcAddressMessage({
+    mnemonic: input.mnemonic,
+    path: input.derivationPath,
+    message: payload.message,
+  });
+  const reward = await postJson(
+    input.fetchImpl,
+    input.addressRewardUrl,
+    JSON.stringify({
+      address: input.mvcAddress,
+      gasChain: 'mvc',
+      challengeId: payload.challengeId,
+      publicKey: challengeSignature.publicKey,
+      signature: challengeSignature.signature,
+    }),
+    {
+      'X-Signature': credential.signature,
+      'X-Public-Key': credential.publicKey,
+    },
+  );
+  const rewardHttp = { status: reward.response.status, statusText: reward.response.statusText };
+  if (!reward.response.ok || !isAcceptedServiceResult(reward.body, /^address already rewarded$/i)) {
+    return {
+      success: false,
+      step1: challenge.body,
+      step2: reward.body,
+      error: formatServiceFailure('address-reward', reward.body, rewardHttp),
+    };
+  }
+  if (readServiceCode(reward.body) === 0 && input.waitMs > 0) {
+    await input.wait(input.waitMs);
+  }
+  return {
+    success: true,
+    step1: challenge.body,
+    step2: reward.body,
+  };
+}
+
 export async function requestMvcGasSubsidy(
   options: RequestMvcGasSubsidyOptions,
   dependencies: RequestMvcGasSubsidyDependencies = {}
@@ -165,45 +291,50 @@ export async function requestMvcGasSubsidy(
   });
   const addressInitUrl = dependencies.addressInitUrl ?? DEFAULT_ADDRESS_INIT_URL;
   const addressRewardUrl = dependencies.addressRewardUrl ?? DEFAULT_ADDRESS_REWARD_URL;
+  const rewardChallengeUrl = dependencies.rewardChallengeUrl ?? DEFAULT_REWARD_CHALLENGE_URL;
   const waitMs = dependencies.waitMs ?? DEFAULT_SUBSIDY_WAIT_MS;
   const requestBody = JSON.stringify({
     address: mvcAddress,
     gasChain: 'mvc',
   });
 
-  const initRequest = { url: addressInitUrl, address: mvcAddress };
   try {
-    let step1Response: Awaited<ReturnType<typeof fetchImpl>> | undefined;
-    let step1: unknown;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      step1Response = await fetchImpl(addressInitUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: requestBody,
+    if (mnemonic) {
+      const challenged = await claimMvcRewardWithChallenge({
+        fetchImpl,
+        rewardChallengeUrl,
+        addressRewardUrl,
+        mvcAddress,
+        mnemonic,
+        derivationPath,
+        wait,
+        waitMs,
       });
-      step1 = await readSubsidyBody(step1Response);
-      const accepted = step1Response.ok && isAcceptedServiceResult(step1, /^address already init(?:ialized)?$/i);
-      if (accepted) break;
-      if (attempt === 2 || !isTransientAddressInitFailure(step1, step1Response.ok)) {
-        const step1Http = { status: step1Response.status, statusText: step1Response.statusText };
-        return {
-          success: false,
-          step1,
-          error: formatServiceFailure('address-init', step1, step1Http, initRequest),
-        };
-      }
-    }
-    if (!step1Response) {
-      return { success: false, error: 'address-init failed: no response' };
+      if (challenged) return challenged;
     }
 
-    if (!mnemonic) {
+    const initRequest = { url: addressInitUrl, address: mvcAddress };
+    const step1Response = await fetchImpl(addressInitUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: requestBody,
+    });
+    const step1 = await readSubsidyBody(step1Response);
+    const initAccepted = step1Response.ok && isAcceptedServiceResult(step1, /^address already init(?:ialized)?$/i);
+    if (!initAccepted) {
       return {
-        success: true,
+        success: false,
         step1,
+        error: formatServiceFailure('address-init', step1, {
+          status: step1Response.status,
+          statusText: step1Response.statusText,
+        }, initRequest),
       };
+    }
+    if (!mnemonic) {
+      return { success: true, step1 };
     }
 
     await wait(waitMs);
@@ -223,8 +354,7 @@ export async function requestMvcGasSubsidy(
     });
     const step2 = await readSubsidyBody(step2Response);
     const step2Http = { status: step2Response.status, statusText: step2Response.statusText };
-
-    if (!step2Response.ok) {
+    if (!step2Response.ok || !isAcceptedServiceResult(step2, /^address already rewarded$/i)) {
       return {
         success: false,
         step1,
@@ -232,20 +362,7 @@ export async function requestMvcGasSubsidy(
         error: formatServiceFailure('address-reward', step2, step2Http),
       };
     }
-    if (!isAcceptedServiceResult(step2, /^address already rewarded$/i)) {
-      return {
-        success: false,
-        step1,
-        step2,
-        error: formatServiceFailure('address-reward', step2, step2Http),
-      };
-    }
-
-    return {
-      success: true,
-      step1,
-      step2,
-    };
+    return { success: true, step1, step2 };
   } catch (error) {
     return {
       success: false,
