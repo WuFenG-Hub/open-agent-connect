@@ -154,6 +154,9 @@ async function runServicesCommand(args, context) {
     if (subcommand === 'owned') {
         const ownedSubcommand = args[1];
         const ownedArgs = args.slice(2);
+        if (!ownedSubcommand || ownedSubcommand.startsWith('-')) {
+            return (0, commandResult_1.commandFailed)('missing_subcommand', 'Usage: metabot services owned list [--from <bot-slug> | --all]. Subcommands: list, orders, modify, revoke.');
+        }
         if (ownedSubcommand === 'list') {
             const handler = context.dependencies.services?.listOwned;
             if (!handler) {

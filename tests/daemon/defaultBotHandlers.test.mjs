@@ -23,6 +23,7 @@ const { createFileSecretStore } = require('../../dist/core/secrets/fileSecretSto
 const { createRuntimeStateStore } = require('../../dist/core/state/runtimeStateStore.js');
 const { resolveMetabotPaths } = require('../../dist/core/state/paths.js');
 const { createMetaAppLocalCacheStore } = require('../../dist/core/metaapp/localCache.js');
+const { createTrafficStore } = require('../../dist/core/traffic/trafficStore.js');
 
 function runtime(provider, id, health = 'healthy') {
   const now = '2026-05-06T00:00:00.000Z';
@@ -870,6 +871,49 @@ test('default file.uploadLarge bypasses sponsor entirely when chain.mvcSponsorUp
   assert.equal(sponsorFactoryCalls, 0);
 });
 
+test('default file.uploadLarge bypasses sponsor entirely when traffic pin mode is selfpay', async (t) => {
+  const homeDir = await createProfileHome('metabot-default-large-upload-traffic-selfpay-');
+  t.after(async () => {
+    await cleanupProfileHome(homeDir);
+  });
+  const systemHomeDir = deriveSystemHome(homeDir);
+  const filePath = path.join(homeDir, 'selfpay-upload.txt');
+  await writeFile(filePath, 'selfpay upload', 'utf8');
+  await writeRuntimeIdentity(homeDir, 'Traffic Selfpay Upload Bot');
+  // The billing switch must constrain the upload tree too: selfpay mode
+  // means no sponsor at all, even with mvcSponsorUploadEnabled left true.
+  await createTrafficStore(systemHomeDir).writeSettings({ mode: 'selfpay' });
+
+  const uploadCalls = [];
+  let sponsorFactoryCalls = 0;
+  const handlers = createDefaultMetabotDaemonHandlers({
+    homeDir,
+    systemHomeDir,
+    getDaemonRecord: () => null,
+    uploadLargeFile: async (input) => {
+      uploadCalls.push(input);
+      return makeDirectUploadResult(input);
+    },
+    createMvcSponsorClient: () => {
+      sponsorFactoryCalls += 1;
+      return {};
+    },
+  });
+
+  const result = await handlers.file.uploadLarge({
+    filePath,
+    contentType: 'text/plain',
+    network: 'mvc',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.uploadMode, 'direct');
+  assert.equal('feeAssist' in result.data, false);
+  assert.equal(uploadCalls.length, 1);
+  assert.equal(uploadCalls[0].mvcSponsorClient, undefined);
+  assert.equal(sponsorFactoryCalls, 0);
+});
+
 test('default file.uploadLarge preserves sponsor feeAssist data on commit failure', async (t) => {
   const homeDir = await createProfileHome('metabot-default-large-upload-sponsor-failure-');
   t.after(async () => {
@@ -1368,6 +1412,55 @@ test('default metaapp.publishProject refuses a project directory outside the Bot
     network: 'mvc',
   });
   assert.equal(updatePreview.state, 'awaiting_confirmation');
+});
+
+test('default metaapp.publishProject confirmCommand echoes the --from selector', async (t) => {
+  const homeDir = await createProfileHome('metabot-default-metaapp-confirm-from-');
+  t.after(async () => {
+    await cleanupProfileHome(homeDir);
+  });
+  const systemHomeDir = deriveSystemHome(homeDir);
+  await writeRuntimeIdentity(homeDir, 'MetaApp Confirm From Bot');
+  await upsertIdentityProfile({
+    systemHomeDir,
+    name: 'MetaApp Confirm From Bot',
+    homeDir,
+    globalMetaId: 'gm-confirm-from-bot',
+    mvcAddress: 'mvc-confirm-from',
+  });
+  const outsideRoot = path.join(homeDir, '..', `${path.basename(homeDir)}-outside`);
+  await mkdir(path.join(outsideRoot, 'dist'), { recursive: true });
+  await writeFile(path.join(outsideRoot, 'dist', 'index.html'), '<h1>secrets</h1>', 'utf8');
+  t.after(async () => {
+    await rm(outsideRoot, { recursive: true, force: true });
+  });
+  const handlers = createDefaultMetabotDaemonHandlers({
+    homeDir,
+    systemHomeDir,
+    signer: makeSigner(async () => {
+      throw new Error('chain write must not run for a preview');
+    }),
+    getDaemonRecord: () => null,
+  });
+
+  // Without --from the confirm command must stay actor-neutral; with it, the
+  // confirm command must keep acting as the same Bot — copying it must not
+  // silently re-run the publish against the Twin Bot.
+  const twinPreview = await handlers.metaapp.publishProject({
+    projectDir: outsideRoot,
+    network: 'mvc',
+  });
+  assert.equal(twinPreview.state, 'awaiting_confirmation');
+  assert.doesNotMatch(twinPreview.data.confirmCommand, /--from/);
+
+  const actorPreview = await handlers.metaapp.publishProject({
+    projectDir: outsideRoot,
+    from: 'gm-confirm-from-bot',
+    network: 'mvc',
+  });
+  assert.equal(actorPreview.state, 'awaiting_confirmation');
+  assert.match(actorPreview.data.confirmCommand, /--from gm-confirm-from-bot/);
+  assert.match(actorPreview.data.confirmCommand, /--confirm$/);
 });
 
 test('default LLM handlers use the twin profile when actor selectors are omitted', async (t) => {

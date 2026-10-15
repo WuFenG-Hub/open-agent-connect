@@ -18,9 +18,11 @@ function resolveContext(context = {}) {
     };
 }
 function resolveExitCode(result) {
-    if (result.ok)
+    if (result.ok && result.state === 'success')
         return 0;
-    if (result.state === 'waiting' || result.state === 'manual_action_required')
+    // Awaiting confirmation is a deliberate pause, not success: scripts must
+    // be able to tell "needs --confirm" apart from "done" (exit 0).
+    if (result.state === 'awaiting_confirmation' || result.state === 'waiting' || result.state === 'manual_action_required')
         return 2;
     return 1;
 }

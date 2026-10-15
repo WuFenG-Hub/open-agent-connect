@@ -6,6 +6,7 @@
 // standalone hosts use runDream with a local completion function.
 import { loadChatPersona } from '../chat/chatPersonaLoader';
 import type { MetabotPaths } from '../state/paths';
+import { createRuntimeStateStore } from '../state/runtimeStateStore';
 import {
   chunkDreamActivity,
   estimateDreamActivityTokens,
@@ -220,11 +221,17 @@ export async function dueDreamDates(
   await dreamStore.resetStaleRunningRuns({ staleMs: STALE_RUNNING_RESET_MS });
   const runStates = await dreamStore.getRunStates();
   const slug = path.basename(paths.profileRoot);
+  // A Bot cannot dream days that predate its own identity: without this
+  // bound the daemon tick backfills a fabricated diary for a brand-new Bot.
+  const identityCreatedAtMs = await createRuntimeStateStore(paths).readState()
+    .then((state) => (typeof state.identity?.createdAt === 'number' ? state.identity.createdAt : undefined))
+    .catch(() => undefined);
   return computeDueDreamDates({
     now: input.now ?? new Date(),
     staggerSeed: dreamStaggerSeedForSlug(slug),
     runStates,
     dreamVersion: DREAM_VERSION,
+    identityCreatedAtMs,
   });
 }
 

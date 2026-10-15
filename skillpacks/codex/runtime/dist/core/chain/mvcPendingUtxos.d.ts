@@ -5,6 +5,9 @@ export declare function getMvcUtxoOutpointKey(input: {
     outputIndex: number;
     address?: string;
 }): string;
+export declare function configurePendingMvcUtxoPersistence(input: {
+    journalPath: string;
+}): void;
 export declare function rememberPendingMvcTransaction(input: {
     address: string;
     spentUtxos: ChainUtxo[];
@@ -17,3 +20,4 @@ export declare function resolveSpendableMvcUtxos(input: {
     now?: number;
 }): ChainUtxo[];
 export declare function __clearPendingMvcUtxosForTests(): void;
+export declare function __setPendingMvcUtxoJournalPathForTests(value: string | null): void;

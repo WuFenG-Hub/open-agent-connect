@@ -1,5 +1,5 @@
 import type { Signer } from '../signing/signer';
-import type { MvcSponsorAddressInfo, MvcSponsorCommitResult, MvcSponsorPreResult, MvcSponsorTrafficAccount } from '../subsidy/mvcSponsorV2Client';
+import type { MvcSponsorAddressInfo, MvcSponsorCommitResult, MvcSponsorOrder, MvcSponsorPreResult, MvcSponsorTrafficAccount } from '../subsidy/mvcSponsorV2Client';
 import { type MvcSponsorFeeAssistMetadata, type MvcSponsorTrafficDeps } from '../subsidy/feeAssist';
 import { type UploadLocalFileToChainResult } from './uploadFile';
 export type { MvcSponsorFeeAssistMode, MvcSponsorFeeAssistReason, MvcSponsorFeeAssistStage, MvcSponsorFeeAssistMetadata, MvcSponsorTrafficDeps, MvcSponsorTrafficSpendRecord, } from '../subsidy/feeAssist';
@@ -28,6 +28,10 @@ export interface MvcSponsorV2DirectUploadClient {
         signature: string;
         message?: string;
     }): Promise<MvcSponsorCommitResult>;
+    /** Optional order-status probe used by the commit-failure fallback. */
+    getSponsorOrder?(payload: {
+        orderId: string;
+    }): Promise<MvcSponsorOrder>;
     /**
      * Traffic-account billing (流量), attached by the daemon wiring only when
      * traffic mode is on. Absent = today's legacy quota flow, untouched.

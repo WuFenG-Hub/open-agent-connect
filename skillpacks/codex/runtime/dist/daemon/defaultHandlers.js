@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveServiceOrderPaymentMetadata = resolveServiceOrderPaymentMetadata;
 exports.lookupPeerChatPublicKey = lookupPeerChatPublicKey;
 exports.fetchPeerChatPublicKey = fetchPeerChatPublicKey;
+exports.lookupMetaIdDisplayName = lookupMetaIdDisplayName;
 exports.rebuildTraceArtifactsFromSessionState = rebuildTraceArtifactsFromSessionState;
 exports.llmDiscoverySweepRunningForHomeDir = llmDiscoverySweepRunningForHomeDir;
 exports.createDefaultMetabotDaemonHandlers = createDefaultMetabotDaemonHandlers;
@@ -16,6 +17,7 @@ const agent_browser_host_contract_1 = require("@openagentinternet/agent-browser-
 const commandResult_1 = require("../core/contracts/commandResult");
 const fileSecretStore_1 = require("../core/secrets/fileSecretStore");
 const identityProfiles_1 = require("../core/identity/identityProfiles");
+const deriveIdentity_1 = require("../core/identity/deriveIdentity");
 const profileWorkspace_1 = require("../core/identity/profileWorkspace");
 const profileNameResolution_1 = require("../core/identity/profileNameResolution");
 const runtimeStateStore_1 = require("../core/state/runtimeStateStore");
@@ -62,6 +64,7 @@ const remoteCall_1 = require("../core/delegation/remoteCall");
 const sessionTrace_1 = require("../core/chat/sessionTrace");
 const transcriptExport_1 = require("../core/chat/transcriptExport");
 const privateChat_1 = require("../core/chat/privateChat");
+const privateChatListing_1 = require("../core/chat/privateChatListing");
 const chatPersonaLoader_1 = require("../core/chat/chatPersonaLoader");
 const defaultChatReplyRunner_1 = require("../core/chat/defaultChatReplyRunner");
 const hostLlmChatReplyRunner_1 = require("../core/chat/hostLlmChatReplyRunner");
@@ -217,16 +220,31 @@ function readInternalUploadConsent(value) {
 function checkMetaAppProjectDirContained(rawInput, actorHomeDir) {
     const requested = typeof rawInput.projectDir === 'string' ? rawInput.projectDir.trim() : '';
     const resolved = node_path_1.default.resolve(requested || '.');
-    if (!(0, chainUploadGate_1.isPathInsideDir)(resolved, actorHomeDir)) {
-        return (0, commandResult_1.commandFailed)('metaapp_project_dir_outside_workspace', `Refused to publish a project from outside the Bot workspace: ${resolved}. `
-            + 'On-chain publishing is irreversible; move or copy the project into the Bot workspace '
-            + `(${actorHomeDir}) and retry.`);
+    const outsideWorkspace = !(0, chainUploadGate_1.isPathInsideDir)(resolved, actorHomeDir);
+    if (outsideWorkspace && rawInput.confirm !== true) {
+        const verb = typeof rawInput.targetPinId === 'string' && rawInput.targetPinId.trim()
+            ? 'update-project'
+            : 'publish-project';
+        // The confirm command must keep acting as the same Bot: without --from it
+        // would silently re-run against the Twin Bot (chain publishes are
+        // irreversible), so echo the caller's actor selector back.
+        const fromSelector = normalizeText(rawInput.from);
+        const fromFlag = fromSelector ? ` --from ${fromSelector}` : '';
+        return (0, commandResult_1.commandAwaitingConfirmation)({
+            projectDir: resolved,
+            botWorkspace: actorHomeDir,
+            confirmCommand: `metabot metaapp ${verb} --project-dir ${resolved}${fromFlag} --confirm`,
+            message: `The project directory is outside the Bot workspace (${actorHomeDir}). `
+                + `Publishing ${resolved} is irreversible and may include secrets. `
+                + `Re-run the same command with --confirm to publish it directly, or copy it into the Bot workspace.`,
+        });
     }
     const manifestFile = typeof rawInput.manifestFile === 'string' ? rawInput.manifestFile.trim() : '';
     if (manifestFile) {
         const resolvedManifest = node_path_1.default.resolve(manifestFile);
-        if (!(0, chainUploadGate_1.isPathInsideDir)(resolvedManifest, actorHomeDir)) {
-            return (0, commandResult_1.commandFailed)('metaapp_project_dir_outside_workspace', `Refused to read a manifest from outside the Bot workspace: ${resolvedManifest}. `
+        const manifestRoot = outsideWorkspace ? resolved : actorHomeDir;
+        if (!(0, chainUploadGate_1.isPathInsideDir)(resolvedManifest, manifestRoot)) {
+            return (0, commandResult_1.commandFailed)('metaapp_project_dir_outside_workspace', `Refused to read a manifest from outside the project directory: ${resolvedManifest}. `
                 + 'Keep the manifest file inside the project directory.');
         }
     }
@@ -3194,6 +3212,13 @@ function readChatPubKeyFromPayload(payload) {
     const data = readObject(record.data) ?? {};
     return normalizeText(data.chatpubkey ?? record.chatpubkey);
 }
+/** True when a 2xx payload actually describes a MetaID record (name, metaid, address, …). */
+function payloadDescribesMetaId(payload) {
+    const record = readObject(payload) ?? {};
+    const data = readObject(record.data) ?? {};
+    return Boolean(normalizeText(data.metaid ?? data.metaId ?? data.globalMetaId ?? data.address ?? data.name)
+        || normalizeText(record.metaid ?? record.metaId ?? record.globalMetaId ?? record.address ?? record.name));
+}
 // Structured lookup that classifies the outcome and preserves upstream errors.
 // `fetchPeerChatPublicKey` (below) is a thin wrapper that keeps the historical
 // `string | null` contract for the many background callers that rely on it.
@@ -3214,6 +3239,7 @@ async function lookupPeerChatPublicKey(globalMetaId, options = {}) {
     // reached endpoints carried a key, the key is genuinely absent rather than
     // merely unreachable.
     let reachedAnyEndpoint = false;
+    let describedAnyMetaId = false;
     for (const url of urls) {
         try {
             const response = await fetch(url);
@@ -3222,9 +3248,13 @@ async function lookupPeerChatPublicKey(globalMetaId, options = {}) {
                 continue;
             }
             reachedAnyEndpoint = true;
-            const chatPublicKey = readChatPubKeyFromPayload(await response.json());
+            const payload = await response.json();
+            const chatPublicKey = readChatPubKeyFromPayload(payload);
             if (chatPublicKey) {
                 return { status: 'found', chatPublicKey };
+            }
+            if (payloadDescribesMetaId(payload)) {
+                describedAnyMetaId = true;
             }
         }
         catch (error) {
@@ -3232,13 +3262,59 @@ async function lookupPeerChatPublicKey(globalMetaId, options = {}) {
         }
     }
     if (reachedAnyEndpoint) {
-        return { status: 'absent' };
+        return describedAnyMetaId ? { status: 'absent' } : { status: 'not_found' };
     }
     return { status: 'unreachable', errors };
 }
 async function fetchPeerChatPublicKey(globalMetaId, options = {}) {
     const outcome = await lookupPeerChatPublicKey(globalMetaId, options);
     return outcome.status === 'found' ? outcome.chatPublicKey : null;
+}
+/** Module-level display-name cache (10 min hit TTL, 1 min miss TTL). */
+const metaIdDisplayNameCache = new Map();
+function readMetaIdNameFromPayload(payload) {
+    const record = readObject(payload) ?? {};
+    const data = readObject(record.data) ?? {};
+    return normalizeText(data.name ?? record.name);
+}
+/**
+ * Best-effort on-chain display name for a globalMetaId (the /info/name the
+ * MetaID gateways index). Cached because conversation listings re-ask for
+ * the same peers; never throws — a name is cosmetic, listing must not fail.
+ */
+async function lookupMetaIdDisplayName(globalMetaId, options = {}) {
+    const normalized = normalizeText(globalMetaId);
+    if (!normalized || !(0, deriveIdentity_1.validateGlobalMetaId)(normalized))
+        return null;
+    const cached = metaIdDisplayNameCache.get(normalized);
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.name;
+    }
+    const urls = [
+        ...(normalizeText(options.chainApiBaseUrl)
+            ? [`${normalizeText(options.chainApiBaseUrl).replace(/\/$/, '')}/api/info/metaid/${encodeURIComponent(normalized)}`]
+            : []),
+        `https://file.metaid.io/metafile-indexer/api/v1/info/globalmetaid/${encodeURIComponent(normalized)}`,
+        `https://manapi.metaid.io/api/info/metaid/${encodeURIComponent(normalized)}`,
+        `https://so.metaid.io/api/info/globalmetaid/${encodeURIComponent(normalized)}`,
+    ];
+    for (const url of urls) {
+        try {
+            const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+            if (!response.ok)
+                continue;
+            const name = readMetaIdNameFromPayload(await response.json());
+            if (name) {
+                metaIdDisplayNameCache.set(normalized, { name, expiresAt: Date.now() + 10 * 60_000 });
+                return name;
+            }
+        }
+        catch {
+            // Try the next gateway.
+        }
+    }
+    metaIdDisplayNameCache.set(normalized, { name: null, expiresAt: Date.now() + 60_000 });
+    return null;
 }
 async function listRuntimeDirectoryServices(input) {
     const selectCachedServices = async (fallbackUsed) => {
@@ -4133,14 +4209,16 @@ function createDefaultMetabotDaemonHandlers(input) {
         }
         // Traffic mode (代付): attach the billing dep (and honor the configured
         // assist-service base URL) so uploads resolve a trafficAccount and journal
-        // each commit; self-pay mode keeps today's quota flow untouched.
+        // each commit. Self-pay mode constrains the upload billing tree the same
+        // way it constrains pin writes: no sponsor at all, wallet-funded.
         const trafficMode = await trafficAccountService.getTrafficPinMode() === 'traffic';
-        const client = trafficMode && !input.createMvcSponsorClient
-            ? (0, mvcSponsorV2Client_1.createMvcSponsorV2Client)({ baseUrl: await trafficAccountService.getConfiguredTrafficApiBase() })
-            : (input.createMvcSponsorClient ?? mvcSponsorV2Client_1.createMvcSponsorV2Client)();
-        if (trafficMode) {
-            client.traffic = mvcSponsorTrafficDeps;
+        if (!trafficMode) {
+            return undefined;
         }
+        const client = input.createMvcSponsorClient
+            ? input.createMvcSponsorClient()
+            : (0, mvcSponsorV2Client_1.createMvcSponsorV2Client)({ baseUrl: await trafficAccountService.getConfiguredTrafficApiBase() });
+        client.traffic = mvcSponsorTrafficDeps;
         return client;
     }
     async function updateConfigDefaultWriteNetwork(targetConfigStore, rawInput) {
@@ -5155,6 +5233,14 @@ function createDefaultMetabotDaemonHandlers(input) {
             peerBot,
             messages,
         };
+    }
+    async function resolveActingBotSlug(rawFrom, homeDir) {
+        const requested = normalizeText(rawFrom);
+        if (requested) {
+            return requested;
+        }
+        const twinSlug = await (0, twinRole_1.resolveCurrentTwinSlug)(normalizedSystemHomeDir).catch(() => null);
+        return normalizeText(twinSlug) || node_path_1.default.basename(homeDir);
     }
     async function resolveActorWriteContext(rawActor) {
         const requestedSlug = normalizeText(rawActor);
@@ -11878,7 +11964,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                     // acting Bot's home; no request field can consent otherwise.
                     for (const filePath of buzzAttachments) {
                         if (node_path_1.default.isAbsolute(filePath) && !(0, chainUploadGate_1.isPathInsideDir)(filePath, actor.homeDir)) {
-                            throw new profileUploadGate_1.UploadOutsideWorkspaceError(filePath, normalizeText(rawInput.from) || 'actor');
+                            throw new profileUploadGate_1.UploadOutsideWorkspaceError(filePath, await resolveActingBotSlug(rawInput.from, actor.homeDir), actor.homeDir);
                         }
                     }
                     const buzzContentHash = (0, writeAttempts_1.stableChainWriteHash)('buzz', [
@@ -11949,7 +12035,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                             + `The note may already be on-chain — verify before publishing again.`);
                     }
                     const result = await (0, publish_1.publishSimpleNote)(actor.signer, async ({ filePath, network: uploadNetwork }) => gatedUpload({
-                        slug: normalizeText(rawInput.from) || 'actor',
+                        slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
                         filePath,
                         network: uploadNetwork,
                     }), {
@@ -12001,7 +12087,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                         confirmExternalUpload: readInternalUploadConsent(rawInput.confirmExternalUpload),
                     });
                     const result = await (0, publish_2.publishSimpleQuestion)(actor.signer, async ({ filePath, network: uploadNetwork }) => gatedUpload({
-                        slug: normalizeText(rawInput.from) || 'actor',
+                        slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
                         filePath,
                         network: uploadNetwork,
                     }), {
@@ -12037,7 +12123,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                 if (!state.identity) {
                     return (0, commandResult_1.commandFailed)('identity_missing', 'Create a local MetaBot identity before publishing an answer.');
                 }
-                const slug = normalizeText(rawInput.from) || 'actor';
+                const slug = await resolveActingBotSlug(rawInput.from, actor.homeDir);
                 const questionPinId = normalizeText(rawInput.answerTo ?? rawInput.answer_to);
                 try {
                     const network = await resolveWriteNetworkForHome(rawInput.network, actor.homeDir);
@@ -12443,10 +12529,41 @@ function createDefaultMetabotDaemonHandlers(input) {
                     }),
                 });
                 const nextState = await targetRuntimeStateStore.readState();
+                if (nextState.identity && !(bootstrap.success || bootstrap.canSkip)) {
+                    await registerIdentityProfile(nextState.identity, profileHomeDir);
+                    await notifyIdentityProfileRegistered();
+                    const slug = node_path_1.default.basename(profileHomeDir);
+                    return (0, commandResult_1.commandFailed)('identity_bootstrap_failed', `${bootstrap.error ?? 'MetaBot identity bootstrap failed before the identity was ready.'} `
+                        + `The local profile "${slug}" was saved. Retry setup with: metabot bot setup-retry --from ${slug}`);
+                }
+                if (!nextState.identity) {
+                    const createdThisCall = !selectedProfile
+                        && !existingIdentity
+                        && node_path_1.default.resolve(profileHomeDir) !== node_path_1.default.resolve(input.homeDir);
+                    if (createdThisCall) {
+                        await node_fs_1.promises.rm(profileHomeDir, { recursive: true, force: true }).catch(() => undefined);
+                    }
+                }
                 if (nextState.identity && (bootstrap.success || bootstrap.canSkip)) {
                     await registerIdentityProfile(nextState.identity, profileHomeDir);
                     await notifyIdentityProfileRegistered();
                     await ensureEmptyPersonaFiles(targetRuntimeStateStore.paths, normalizedName);
+                    // Ensure traffic account is set up and bind all local bots.
+                    // This guarantees new users default to traffic-mode for on-chain writes.
+                    // Non-blocking: failure doesn't prevent identity creation, but logs warning.
+                    try {
+                        const targetTrafficService = (0, trafficAccountService_1.createTrafficAccountService)({
+                            systemHomeDir: normalizedSystemHomeDir,
+                        });
+                        await targetTrafficService.ensureTrafficAccount();
+                        const bindResult = await targetTrafficService.bindAllLocalBots();
+                        if (bindResult.boundCount > 0) {
+                            console.log(`[IdentityCreate] Bound ${bindResult.boundCount} bot(s) to traffic account`);
+                        }
+                    }
+                    catch (error) {
+                        console.warn('[IdentityCreate] Traffic account setup failed:', error);
+                    }
                     try {
                         const profile = await (0, metabotProfileManager_1.createMetabotProfileFromIdentity)(normalizedSystemHomeDir, {
                             name: nextState.identity.name,
@@ -12553,8 +12670,8 @@ function createDefaultMetabotDaemonHandlers(input) {
                         total: presence.total,
                         onlineWindowSeconds: presence.onlineWindowSeconds,
                         bots: onlineOnly
-                            ? presence.bots
-                            : presence.bots.map((entry) => ({ ...entry })),
+                            ? presence.bots.filter((entry) => entry.online)
+                            : presence.bots,
                     });
                 }
                 catch (error) {
@@ -13291,8 +13408,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                 }
                 const serviceDisplayName = normalizeText(service.displayName) || normalizeText(service.serviceName);
                 if (plan.confirmation.requiresConfirmation
-                    && request.confirmed !== true
-                    && (plan.confirmation.policyMode === 'confirm_paid_only' || plan.confirmation.policyMode === 'auto_when_safe')) {
+                    && request.confirmed !== true) {
                     const confirmRequest = {
                         servicePinId: plan.service.servicePinId,
                         providerGlobalMetaId: plan.service.providerGlobalMetaId,
@@ -13890,7 +14006,10 @@ function createDefaultMetabotDaemonHandlers(input) {
                     });
                     // Return immediately — CLI will poll trace API for completion
                     const daemon = input.getDaemonRecord();
-                    return (0, commandResult_1.commandWaiting)('order_sent_awaiting_provider', 'Order sent to provider. Waiting for response...', 3000, {
+                    const broadcastPin = orderPinId || serviceOrderPinId;
+                    return (0, commandResult_1.commandWaiting)('order_sent_awaiting_provider', broadcastPin
+                        ? `Order was broadcast (${broadcastPin}) but the provider has not answered yet. Continue with: metabot trace get --trace-id ${trace.traceId}`
+                        : 'Order sent to provider. Waiting for response...', 3000, {
                         localUiUrl: (0, conversationUrl_1.buildConversationLocalUiUrl)(daemon, state.identity?.globalMetaId, plan.service.providerGlobalMetaId)
                             ?? buildDaemonLocalUiUrl(daemon, '/ui/trace', {
                                 traceId: trace.traceId,
@@ -14999,6 +15118,13 @@ function createDefaultMetabotDaemonHandlers(input) {
                 if (!request.to || !request.content) {
                     return (0, commandResult_1.commandFailed)('invalid_chat_request', 'Private chat request must include to and content.');
                 }
+                // Format-validate the recipient before any chain work: an invalid
+                // globalMetaId and a nonexistent one are very different user errors,
+                // and without this check both surface as "no chat public key on
+                // chain", which reads like the peer's problem.
+                if (request.to !== state.identity.globalMetaId && !(0, deriveIdentity_1.validateGlobalMetaId)(request.to)) {
+                    return (0, commandResult_1.commandFailed)('invalid_recipient_metaid', `"${request.to}" is not a valid globalMetaId. Expected the id-prefixed on-chain identity, e.g. idq1t6w8….`);
+                }
                 let privateChatIdentity;
                 try {
                     privateChatIdentity = await actor.signer.getPrivateChatIdentity();
@@ -15021,6 +15147,9 @@ function createDefaultMetabotDaemonHandlers(input) {
                     });
                     if (outcome.status === 'found') {
                         peerChatPublicKey = outcome.chatPublicKey;
+                    }
+                    else if (outcome.status === 'not_found') {
+                        return (0, commandResult_1.commandFailed)('peer_not_found', `No MetaID exists on chain for "${request.to}". Check the recipient's globalMetaId and try again.`, { data: { target: request.to } });
                     }
                     else if (outcome.status === 'unreachable') {
                         const cachedConversation = await (0, conversationStore_1.createA2AConversationStore)({
@@ -15202,17 +15331,129 @@ function createDefaultMetabotDaemonHandlers(input) {
                     return actor.failure;
                 }
                 const state = await actor.privateChatStateStore.readState();
-                return (0, commandResult_1.commandSuccess)({ conversations: state.conversations });
+                const runtime = await actor.runtimeStateStore.readState();
+                const localGlobalMetaId = normalizeText(runtime.identity?.globalMetaId);
+                if (!localGlobalMetaId) {
+                    return (0, commandResult_1.commandSuccess)({ conversations: state.conversations });
+                }
+                try {
+                    const listed = await (0, conversationProjection_1.listPeerConversationSummaries)({
+                        homeDir: actor.homeDir,
+                        localGlobalMetaId,
+                        limit: 100,
+                    });
+                    const conversations = (0, privateChatListing_1.mergeStoredPrivateChatsWithA2A)({
+                        localGlobalMetaId,
+                        stored: state.conversations,
+                        summaries: listed.conversations,
+                    });
+                    // turnCount counts auto-reply turns only, so it reads as "1" for a
+                    // hand-written 5-message conversation. Surface the real message
+                    // count: stored private-chat messages merged (max) with the A2A
+                    // transcript count for the same peer.
+                    const storedCounts = new Map();
+                    for (const message of state.messages) {
+                        const key = normalizeText(message.conversationId);
+                        storedCounts.set(key, (storedCounts.get(key) ?? 0) + 1);
+                    }
+                    const summaryCountByPeer = new Map();
+                    for (const summary of listed.conversations) {
+                        const key = normalizeText(summary.peerGlobalMetaId).toLowerCase();
+                        summaryCountByPeer.set(key, Math.max(summaryCountByPeer.get(key) ?? 0, Number(summary.messageCount) || 0));
+                    }
+                    // Resolve on-chain /info/name for peers whose display name is not
+                    // known locally; failures keep the stored value (usually null).
+                    const namelessPeers = new Set();
+                    for (const conversation of conversations) {
+                        const peerGlobalMetaId = normalizeText(conversation.peerGlobalMetaId);
+                        // Only well-formed ids are worth a gateway round-trip (and this
+                        // keeps test fixtures with placeholder ids fully offline).
+                        if (!normalizeText(conversation.peerName) && (0, deriveIdentity_1.validateGlobalMetaId)(peerGlobalMetaId)) {
+                            namelessPeers.add(peerGlobalMetaId);
+                        }
+                    }
+                    const nameByPeer = new Map();
+                    await Promise.all([...namelessPeers].map(async (peerGlobalMetaId) => {
+                        const name = await lookupMetaIdDisplayName(peerGlobalMetaId, {
+                            chainApiBaseUrl: input.chainApiBaseUrl,
+                        }).catch(() => null);
+                        if (name) {
+                            nameByPeer.set(peerGlobalMetaId, name);
+                        }
+                    }));
+                    return (0, commandResult_1.commandSuccess)({
+                        conversations: conversations.map((conversation) => {
+                            const storedCount = storedCounts.get(normalizeText(conversation.conversationId)) ?? 0;
+                            const summaryCount = summaryCountByPeer.get(normalizeText(conversation.peerGlobalMetaId).toLowerCase()) ?? 0;
+                            const resolvedName = nameByPeer.get(normalizeText(conversation.peerGlobalMetaId));
+                            return {
+                                ...conversation,
+                                ...(resolvedName ? { peerName: resolvedName } : {}),
+                                messageCount: Math.max(storedCount, summaryCount),
+                            };
+                        }),
+                    });
+                }
+                catch {
+                    return (0, commandResult_1.commandSuccess)({ conversations: state.conversations });
+                }
             },
             privateChatMessages: async (msgInput) => {
                 const actor = await resolveActorChatContext(msgInput.from);
                 if ('failure' in actor) {
                     return actor.failure;
                 }
-                const messages = await actor.privateChatStateStore.getRecentMessages(normalizeText(msgInput.conversationId), typeof msgInput.limit === 'number' && Number.isFinite(msgInput.limit)
+                const conversationId = normalizeText(msgInput.conversationId);
+                const limit = typeof msgInput.limit === 'number' && Number.isFinite(msgInput.limit)
                     ? Math.max(1, Math.trunc(msgInput.limit))
-                    : 50);
-                return (0, commandResult_1.commandSuccess)({ messages });
+                    : 50;
+                const stored = await actor.privateChatStateStore.getRecentMessages(conversationId, limit);
+                const runtime = await actor.runtimeStateStore.readState();
+                const localGlobalMetaId = normalizeText(runtime.identity?.globalMetaId);
+                if (!localGlobalMetaId) {
+                    return (0, commandResult_1.commandSuccess)({ messages: stored });
+                }
+                const chatState = await actor.privateChatStateStore.readState();
+                let summaries = [];
+                try {
+                    summaries = (await (0, conversationProjection_1.listPeerConversationSummaries)({
+                        homeDir: actor.homeDir,
+                        localGlobalMetaId,
+                        limit: 100,
+                    })).conversations;
+                }
+                catch {
+                    summaries = [];
+                }
+                const peerGlobalMetaId = (0, privateChatListing_1.peerGlobalMetaIdForConversation)({
+                    conversationId,
+                    localGlobalMetaId,
+                    stored: chatState.conversations,
+                    summaries,
+                });
+                if (!peerGlobalMetaId) {
+                    return (0, commandResult_1.commandSuccess)({ messages: stored });
+                }
+                try {
+                    const a2a = await (0, conversationProjection_1.readPeerConversationMessages)({
+                        homeDir: actor.homeDir,
+                        localGlobalMetaId,
+                        peerGlobalMetaId,
+                        limit,
+                    });
+                    return (0, commandResult_1.commandSuccess)({
+                        messages: (0, privateChatListing_1.mergePrivateChatMessages)({
+                            conversationId,
+                            localGlobalMetaId,
+                            stored,
+                            a2aMessages: a2a.messages,
+                            limit,
+                        }),
+                    });
+                }
+                catch {
+                    return (0, commandResult_1.commandSuccess)({ messages: stored });
+                }
             },
             privateFile: async (rawInput) => {
                 // Private file message (IDBots simplefilemsg parity): the file is
@@ -15692,7 +15933,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                         confirmExternalUpload: readInternalUploadConsent(rawInput.confirmExternalUpload),
                     });
                     const result = await gatedUpload({
-                        slug: normalizeText(rawInput.from) || 'actor',
+                        slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
                         filePath: normalizeText(rawInput.filePath),
                         network,
                         ...(typeof rawInput.contentType === 'string' && rawInput.contentType.trim()
@@ -15724,7 +15965,11 @@ function createDefaultMetabotDaemonHandlers(input) {
                         // Probe-only invocation: refuses out-of-workspace paths before the
                         // heavy upload machinery starts.
                         upload: async () => ({ metafileUri: '', pinId: '' }),
-                    })({ slug: 'actor', filePath: normalizeText(rawInput.filePath), network });
+                    })({
+                        slug: await resolveActingBotSlug(rawInput.from, actor.homeDir),
+                        filePath: normalizeText(rawInput.filePath),
+                        network,
+                    });
                     void gateCheck;
                     const result = await uploadLargeFile({
                         filePath: normalizeText(rawInput.filePath),

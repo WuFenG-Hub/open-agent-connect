@@ -232,7 +232,9 @@ test('runCli doctor reports when the invoked CLI entry differs from the canonica
   // bare ok:false (multi-install drift is unfixable without guidance).
   assert.ok(Array.isArray(shimCheck.remediation) && shimCheck.remediation.length > 0);
   assert.ok(shimCheck.remediation.some((line) => line.includes('oac install')));
-  assert.ok(shimCheck.remediation.some((line) => line.includes('metabot daemon restart')));
+  // The restart advice must go through the canonical shim: a plain
+  // `metabot daemon restart` re-spawns from whichever entry runs it.
+  assert.ok(shimCheck.remediation.some((line) => line.includes(`${canonicalShimPath} daemon restart`)));
 });
 
 test('runCli dispatches `metabot identity create --name` with the provided MetaBot name', async () => {

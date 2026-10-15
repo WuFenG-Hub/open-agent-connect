@@ -84,6 +84,9 @@ test('chat conversations lists a private message stored only in the A2A file', a
   assert.equal(listed.ok, true, JSON.stringify(listed));
   const conversation = listed.data.conversations.find((entry) => entry.peerGlobalMetaId === PEER_ID);
   assert.ok(conversation, 'sent private chat must appear in chat conversations');
+  // The listing carries the real message count (turnCount only counts
+  // auto-reply turns and reads as 1 for a hand-written conversation).
+  assert.equal(conversation.messageCount, 1);
 
   const messages = await handlers.chat.privateChatMessages({
     conversationId: conversation.conversationId,

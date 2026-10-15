@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const {
   lookupPeerChatPublicKey,
   fetchPeerChatPublicKey,
+  lookupMetaIdDisplayName,
 } = require('../../dist/daemon/defaultHandlers.js');
 
 const CHAT_PUBLIC_KEY = '046671c57d5bb3352a6ea84a01f7edf8afd3c8c3d4d1a281fd1b20fdba14d05c367c69fea700da308cf96b1aedbcb113fca7c187147cfeba79fb11f3b085d893cf';
@@ -112,5 +113,40 @@ test('lookupPeerChatPublicKey returns absent for an empty globalMetaId', async (
   }, async () => {
     const outcome = await lookupPeerChatPublicKey('');
     assert.equal(outcome.status, 'absent');
+  });
+});
+
+test('lookupPeerChatPublicKey classifies empty 2xx payloads as not_found (target does not exist)', async () => {
+  await withMockedFetch(async () => jsonResponse({ data: null, code: 0 }), async () => {
+    const outcome = await lookupPeerChatPublicKey(GLOBAL_META_ID);
+    assert.equal(outcome.status, 'not_found');
+  });
+});
+
+test('lookupPeerChatPublicKey keeps absent when the payload describes a MetaID without a key', async () => {
+  await withMockedFetch(async () => jsonResponse({ data: { metaid: 'metaid-1', name: 'Somebody' } }), async () => {
+    const outcome = await lookupPeerChatPublicKey(GLOBAL_META_ID);
+    assert.equal(outcome.status, 'absent');
+  });
+});
+
+test('lookupMetaIdDisplayName resolves the on-chain /info/name and caches it', async () => {
+  let calls = 0;
+  await withMockedFetch(async () => {
+    calls += 1;
+    return jsonResponse({ data: { name: 'AI_Sunny' } });
+  }, async () => {
+    assert.equal(await lookupMetaIdDisplayName(GLOBAL_META_ID), 'AI_Sunny');
+    // Cached: no further endpoint hits.
+    assert.equal(await lookupMetaIdDisplayName(GLOBAL_META_ID), 'AI_Sunny');
+    assert.equal(calls, 1);
+  });
+});
+
+test('lookupMetaIdDisplayName skips malformed ids without a network round-trip', async () => {
+  await withMockedFetch(async () => {
+    assert.fail('fetch should not be called for a malformed id');
+  }, async () => {
+    assert.equal(await lookupMetaIdDisplayName('not-a-valid-metaid'), null);
   });
 });

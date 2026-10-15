@@ -164,7 +164,10 @@ export declare function validateSelfIdentity(text?: string | null): {
 export declare function computeDreamRetryDelayMs(attemptCount: number): number;
 /**
  * Which past dates still need dream attention for this bot.
- * - Candidates: the last `lookbackDays` calendar days, today excluded.
+ * - Candidates: the last `lookbackDays` calendar days, today excluded, and
+ *   never earlier than the day the bot identity was created: a brand-new
+ *   Bot must not catch up diary entries for days it did not exist (the
+ *   daemon tick would otherwise fabricate history for them).
  * - Yesterday's first attempt runs inside the nightly window after the bot's
  *   staggered minute; when the window was missed (app off or asleep
  *   overnight) it is caught up at any time of day instead of waiting for the
@@ -185,6 +188,7 @@ export declare function computeDueDreamDates(input: {
     runStates: Map<string, DreamRunStateLike>;
     lookbackDays?: number;
     dreamVersion?: number;
+    identityCreatedAtMs?: number;
 }): DreamDueResult;
 /** Local day [startMs, endMs) bounds for a YYYY-MM-DD string. */
 export declare function getDayBoundsMs(dateStr: string): {

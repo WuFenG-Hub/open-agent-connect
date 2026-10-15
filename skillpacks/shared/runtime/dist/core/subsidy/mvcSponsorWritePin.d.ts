@@ -10,21 +10,25 @@
  *
  * Fallback semantics (IDBots parity): service_unavailable / no_user_utxo /
  * insufficient_quota / insufficient_traffic fall back to the regular
- * self-paid write (result carries feeAssist metadata); pre_rejected /
- * commit_failed are hard failures carrying feeAssist diagnostics on
- * error.data. In traffic mode, failure to resolve the traffic account is
- * also service_unavailable: do not continue with the legacy sponsor quota
- * path when the configured traffic interface is unavailable.
+ * self-paid write (result carries feeAssist metadata); pre_rejected remains
+ * a hard failure carrying feeAssist diagnostics on error.data. A commit
+ * failure whose sponsor order did not broadcast (broadcast errors like
+ * txn-mempool-conflict on the sponsor's fee inputs) also falls back to the
+ * MetaBot wallet: the drafted user inputs are journaled as pending-spent so
+ * the self-paid rebuild cannot double-spend them. In traffic mode, failure
+ * to resolve the traffic account is also service_unavailable: do not
+ * continue with the legacy sponsor quota path when the configured traffic
+ * interface is unavailable.
  */
 import type { DerivedIdentity } from '../identity/deriveIdentity';
 import type { ChainWriteResult, NormalizedChainWriteRequest } from '../chain/writePin';
 import type { ChainUtxo } from '../chain/adapters/types';
 import type { ResolveSponsorWritePin } from '../signing/localMnemonicSigner';
-import type { MvcSponsorAddressInfo, MvcSponsorChallenge, MvcSponsorCommitResult, MvcSponsorPreResult, MvcSponsorTrafficAccount } from './mvcSponsorV2Client';
+import type { MvcSponsorAddressInfo, MvcSponsorChallenge, MvcSponsorCommitResult, MvcSponsorOrder, MvcSponsorPreResult, MvcSponsorTrafficAccount } from './mvcSponsorV2Client';
 import { type MvcSponsorTrafficDeps } from './feeAssist';
 import type { TrafficAccountService } from '../traffic/trafficAccountService';
 /** Reasons that fall back to the regular self-paid write (IDBots parity). */
-export type MvcSponsorWritePinFallbackReason = 'service_unavailable' | 'no_user_utxo' | 'insufficient_quota' | 'insufficient_traffic';
+export type MvcSponsorWritePinFallbackReason = 'service_unavailable' | 'no_user_utxo' | 'insufficient_quota' | 'insufficient_traffic' | 'commit_failed';
 /** Minimal sponsor-client surface used by the pin-write flow. */
 export interface MvcSponsorWritePinClient {
     getAddressInfo(payload: {
@@ -46,6 +50,10 @@ export interface MvcSponsorWritePinClient {
         signature: string;
         message?: string;
     }): Promise<MvcSponsorCommitResult>;
+    /** Optional order-status probe used by the commit-failure fallback. */
+    getSponsorOrder?(payload: {
+        orderId: string;
+    }): Promise<MvcSponsorOrder>;
 }
 export interface MvcSponsorWritePinInput {
     request: NormalizedChainWriteRequest;

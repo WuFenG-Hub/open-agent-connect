@@ -10,6 +10,8 @@ const deriveIdentity_1 = require("../identity/deriveIdentity");
 const requestMvcGasSubsidy_1 = require("../subsidy/requestMvcGasSubsidy");
 const DEFAULT_METABOT_ID = 1;
 const DEFAULT_SYNC_STEP_DELAY_MS = 3_000;
+const DEFAULT_CHATPUBKEY_MAX_RETRIES = 2;
+const DEFAULT_CHATPUBKEY_RETRY_DELAY_MS = 2_000;
 function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -168,6 +170,8 @@ function createLocalIdentitySyncStep(input) {
         await new Promise((resolve) => setTimeout(resolve, ms));
     });
     const stepDelayMs = input.stepDelayMs ?? DEFAULT_SYNC_STEP_DELAY_MS;
+    const chatPubkeyMaxRetries = input.chatPubkeyMaxRetries ?? DEFAULT_CHATPUBKEY_MAX_RETRIES;
+    const chatPubkeyRetryDelayMs = input.chatPubkeyRetryDelayMs ?? DEFAULT_CHATPUBKEY_RETRY_DELAY_MS;
     return async (context) => {
         if (!context.subsidy.success) {
             const error = context.subsidy.error ?? 'MVC subsidy must succeed before syncing identity to chain.';
@@ -261,49 +265,56 @@ function createLocalIdentitySyncStep(input) {
             const error = 'Chat public key is empty.';
             await updateIdentityRecord(input.runtimeStateStore, (identity) => ({
                 ...identity,
-                syncState: 'partial',
+                syncState: 'failed',
                 syncError: error,
             }));
             return {
                 success: false,
                 error,
-                canSkip: true,
+                canSkip: false,
                 chainWrites,
             };
         }
-        try {
-            const chatResult = await input.signer.writePin({
-                operation: 'create',
-                path: '/info/chatpubkey',
-                contentType: 'text/plain',
-                payload: chatPublicKey,
-                network: 'mvc',
-            });
-            chainWrites.push(chatResult);
-            await updateIdentityRecord(input.runtimeStateStore, (identity) => ({
-                ...identity,
-                chatPublicKeyPinId: chatResult.pinId,
-                syncState: 'synced',
-                syncError: null,
-            }));
-            return {
-                success: true,
-                chainWrites,
-            };
+        let lastError = null;
+        for (let attempt = 0; attempt <= chatPubkeyMaxRetries; attempt++) {
+            try {
+                const chatResult = await input.signer.writePin({
+                    operation: 'create',
+                    path: '/info/chatpubkey',
+                    contentType: 'text/plain',
+                    payload: chatPublicKey,
+                    network: 'mvc',
+                });
+                chainWrites.push(chatResult);
+                await updateIdentityRecord(input.runtimeStateStore, (identity) => ({
+                    ...identity,
+                    chatPublicKeyPinId: chatResult.pinId,
+                    syncState: 'synced',
+                    syncError: null,
+                }));
+                return {
+                    success: true,
+                    chainWrites,
+                };
+            }
+            catch (error) {
+                lastError = error instanceof Error ? error : String(error);
+                if (attempt < chatPubkeyMaxRetries) {
+                    await wait(chatPubkeyRetryDelayMs);
+                }
+            }
         }
-        catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            await updateIdentityRecord(input.runtimeStateStore, (identity) => ({
-                ...identity,
-                syncState: 'partial',
-                syncError: message,
-            }));
-            return {
-                success: false,
-                error: message,
-                canSkip: true,
-                chainWrites,
-            };
-        }
+        const message = lastError instanceof Error ? lastError.message : String(lastError);
+        await updateIdentityRecord(input.runtimeStateStore, (identity) => ({
+            ...identity,
+            syncState: 'failed',
+            syncError: `Failed to sync chatPublicKey after ${chatPubkeyMaxRetries + 1} attempts: ${message}`,
+        }));
+        return {
+            success: false,
+            error: `Failed to sync chatPublicKey after ${chatPubkeyMaxRetries + 1} attempts: ${message}`,
+            canSkip: false,
+            chainWrites,
+        };
     };
 }

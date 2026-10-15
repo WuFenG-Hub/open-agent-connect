@@ -18,6 +18,7 @@ exports.dreamStatus = dreamStatus;
 // across the process boundary with `ctx.llm` (plan → LLM → commit), while
 // standalone hosts use runDream with a local completion function.
 const chatPersonaLoader_1 = require("../chat/chatPersonaLoader");
+const runtimeStateStore_1 = require("../state/runtimeStateStore");
 const dreamFragments_1 = require("./dreamFragments");
 const dreamPrompt_1 = require("./dreamPrompt");
 const dreamStore_1 = require("./dreamStore");
@@ -109,11 +110,17 @@ async function dueDreamDates(paths, input = {}, deps = {}) {
     await dreamStore.resetStaleRunningRuns({ staleMs: STALE_RUNNING_RESET_MS });
     const runStates = await dreamStore.getRunStates();
     const slug = node_path_1.default.basename(paths.profileRoot);
+    // A Bot cannot dream days that predate its own identity: without this
+    // bound the daemon tick backfills a fabricated diary for a brand-new Bot.
+    const identityCreatedAtMs = await (0, runtimeStateStore_1.createRuntimeStateStore)(paths).readState()
+        .then((state) => (typeof state.identity?.createdAt === 'number' ? state.identity.createdAt : undefined))
+        .catch(() => undefined);
     return (0, dreamPrompt_1.computeDueDreamDates)({
         now: input.now ?? new Date(),
         staggerSeed: (0, dreamPrompt_1.dreamStaggerSeedForSlug)(slug),
         runStates,
         dreamVersion: dreamPrompt_1.DREAM_VERSION,
+        identityCreatedAtMs,
     });
 }
 /**

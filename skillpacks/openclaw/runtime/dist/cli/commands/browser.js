@@ -18,6 +18,9 @@ function parseBrowserOpenArgs(args) {
             index += 1;
             continue;
         }
+        if (token === '--json') {
+            continue;
+        }
         if (token.startsWith('--')) {
             return {
                 error: (0, commandResult_1.commandFailed)('invalid_flag', `Unsupported flag: ${token}.`),

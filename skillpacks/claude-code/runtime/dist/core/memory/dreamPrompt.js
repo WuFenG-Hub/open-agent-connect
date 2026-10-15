@@ -78,7 +78,10 @@ function computeDreamRetryDelayMs(attemptCount) {
 }
 /**
  * Which past dates still need dream attention for this bot.
- * - Candidates: the last `lookbackDays` calendar days, today excluded.
+ * - Candidates: the last `lookbackDays` calendar days, today excluded, and
+ *   never earlier than the day the bot identity was created: a brand-new
+ *   Bot must not catch up diary entries for days it did not exist (the
+ *   daemon tick would otherwise fabricate history for them).
  * - Yesterday's first attempt runs inside the nightly window after the bot's
  *   staggered minute; when the window was missed (app off or asleep
  *   overnight) it is caught up at any time of day instead of waiting for the
@@ -104,6 +107,11 @@ function computeDueDreamDates(input) {
     for (let daysAgo = lookback; daysAgo >= 1; daysAgo--) {
         const candidate = new Date(input.now.getFullYear(), input.now.getMonth(), input.now.getDate() - daysAgo);
         const dateStr = (0, experiencePromptBlocks_1.formatLocalDate)(candidate);
+        if (typeof input.identityCreatedAtMs === 'number' && Number.isFinite(input.identityCreatedAtMs)
+            && getDayBoundsMs(dateStr).endMs <= input.identityCreatedAtMs) {
+            // The whole day ended before this Bot existed.
+            continue;
+        }
         const state = input.runStates.get(dateStr);
         if (state?.status === 'running')
             continue;

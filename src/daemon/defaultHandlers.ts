@@ -18,6 +18,7 @@ import {
   upsertIdentityProfile,
 } from '../core/identity/identityProfiles';
 import type { IdentityProfileRecord } from '../core/identity/identityProfiles';
+import { validateGlobalMetaId } from '../core/identity/deriveIdentity';
 import {
   ensureProfileWorkspace,
   resolveIdentityCreateProfileHome,
@@ -549,10 +550,15 @@ function checkMetaAppProjectDirContained(
     const verb = typeof rawInput.targetPinId === 'string' && rawInput.targetPinId.trim()
       ? 'update-project'
       : 'publish-project';
+    // The confirm command must keep acting as the same Bot: without --from it
+    // would silently re-run against the Twin Bot (chain publishes are
+    // irreversible), so echo the caller's actor selector back.
+    const fromSelector = normalizeText(rawInput.from);
+    const fromFlag = fromSelector ? ` --from ${fromSelector}` : '';
     return commandAwaitingConfirmation({
       projectDir: resolved,
       botWorkspace: actorHomeDir,
-      confirmCommand: `metabot metaapp ${verb} --project-dir ${resolved} --confirm`,
+      confirmCommand: `metabot metaapp ${verb} --project-dir ${resolved}${fromFlag} --confirm`,
       message: `The project directory is outside the Bot workspace (${actorHomeDir}). `
         + `Publishing ${resolved} is irreversible and may include secrets. `
         + `Re-run the same command with --confirm to publish it directly, or copy it into the Bot workspace.`,
@@ -4220,6 +4226,10 @@ export type PeerChatPublicKeyOutcome =
   // The lookup reached at least one endpoint and it answered without a usable
   // chatpubkey. The peer genuinely has no published key.
   | { status: 'absent' }
+  // Every reached endpoint answered 2xx but carried no MetaID record: the
+  // target does not exist on chain. Distinct from 'absent' so callers do not
+  // tell the user it is the peer's problem.
+  | { status: 'not_found' }
   // No endpoint could be reached or returned a usable response. This is a
   // network/gateway problem, not missing data. The real upstream errors are
   // preserved so callers can surface them instead of misreporting "no key".
@@ -4229,6 +4239,16 @@ function readChatPubKeyFromPayload(payload: unknown): string {
   const record = readObject(payload) ?? {};
   const data = readObject(record.data) ?? {};
   return normalizeText(data.chatpubkey ?? record.chatpubkey);
+}
+
+/** True when a 2xx payload actually describes a MetaID record (name, metaid, address, …). */
+function payloadDescribesMetaId(payload: unknown): boolean {
+  const record = readObject(payload) ?? {};
+  const data = readObject(record.data) ?? {};
+  return Boolean(
+    normalizeText(data.metaid ?? data.metaId ?? data.globalMetaId ?? data.address ?? data.name)
+      || normalizeText(record.metaid ?? record.metaId ?? record.globalMetaId ?? record.address ?? record.name),
+  );
 }
 
 // Structured lookup that classifies the outcome and preserves upstream errors.
@@ -4255,6 +4275,7 @@ export async function lookupPeerChatPublicKey(
   // reached endpoints carried a key, the key is genuinely absent rather than
   // merely unreachable.
   let reachedAnyEndpoint = false;
+  let describedAnyMetaId = false;
 
   for (const url of urls) {
     try {
@@ -4264,9 +4285,13 @@ export async function lookupPeerChatPublicKey(
         continue;
       }
       reachedAnyEndpoint = true;
-      const chatPublicKey = readChatPubKeyFromPayload(await response.json());
+      const payload = await response.json();
+      const chatPublicKey = readChatPubKeyFromPayload(payload);
       if (chatPublicKey) {
         return { status: 'found', chatPublicKey };
+      }
+      if (payloadDescribesMetaId(payload)) {
+        describedAnyMetaId = true;
       }
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -4274,7 +4299,7 @@ export async function lookupPeerChatPublicKey(
   }
 
   if (reachedAnyEndpoint) {
-    return { status: 'absent' };
+    return describedAnyMetaId ? { status: 'absent' } : { status: 'not_found' };
   }
   return { status: 'unreachable', errors };
 }
@@ -4285,6 +4310,55 @@ export async function fetchPeerChatPublicKey(
 ): Promise<string | null> {
   const outcome = await lookupPeerChatPublicKey(globalMetaId, options);
   return outcome.status === 'found' ? outcome.chatPublicKey : null;
+}
+
+/** Module-level display-name cache (10 min hit TTL, 1 min miss TTL). */
+const metaIdDisplayNameCache = new Map<string, { name: string | null; expiresAt: number }>();
+
+function readMetaIdNameFromPayload(payload: unknown): string {
+  const record = readObject(payload) ?? {};
+  const data = readObject(record.data) ?? {};
+  return normalizeText(data.name ?? record.name);
+}
+
+/**
+ * Best-effort on-chain display name for a globalMetaId (the /info/name the
+ * MetaID gateways index). Cached because conversation listings re-ask for
+ * the same peers; never throws — a name is cosmetic, listing must not fail.
+ */
+export async function lookupMetaIdDisplayName(
+  globalMetaId: string,
+  options: { chainApiBaseUrl?: string } = {},
+): Promise<string | null> {
+  const normalized = normalizeText(globalMetaId);
+  if (!normalized || !validateGlobalMetaId(normalized)) return null;
+  const cached = metaIdDisplayNameCache.get(normalized);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name;
+  }
+  const urls = [
+    ...(normalizeText(options.chainApiBaseUrl)
+      ? [`${normalizeText(options.chainApiBaseUrl).replace(/\/$/, '')}/api/info/metaid/${encodeURIComponent(normalized)}`]
+      : []),
+    `https://file.metaid.io/metafile-indexer/api/v1/info/globalmetaid/${encodeURIComponent(normalized)}`,
+    `https://manapi.metaid.io/api/info/metaid/${encodeURIComponent(normalized)}`,
+    `https://so.metaid.io/api/info/globalmetaid/${encodeURIComponent(normalized)}`,
+  ];
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!response.ok) continue;
+      const name = readMetaIdNameFromPayload(await response.json());
+      if (name) {
+        metaIdDisplayNameCache.set(normalized, { name, expiresAt: Date.now() + 10 * 60_000 });
+        return name;
+      }
+    } catch {
+      // Try the next gateway.
+    }
+  }
+  metaIdDisplayNameCache.set(normalized, { name: null, expiresAt: Date.now() + 60_000 });
+  return null;
 }
 
 async function listRuntimeDirectoryServices(input: {
@@ -5500,14 +5574,16 @@ export function createDefaultMetabotDaemonHandlers(input: {
     }
     // Traffic mode (代付): attach the billing dep (and honor the configured
     // assist-service base URL) so uploads resolve a trafficAccount and journal
-    // each commit; self-pay mode keeps today's quota flow untouched.
+    // each commit. Self-pay mode constrains the upload billing tree the same
+    // way it constrains pin writes: no sponsor at all, wallet-funded.
     const trafficMode = await trafficAccountService.getTrafficPinMode() === 'traffic';
-    const client: MvcSponsorV2DirectUploadClient = trafficMode && !input.createMvcSponsorClient
-      ? createMvcSponsorV2Client({ baseUrl: await trafficAccountService.getConfiguredTrafficApiBase() })
-      : (input.createMvcSponsorClient ?? createMvcSponsorV2Client)();
-    if (trafficMode) {
-      client.traffic = mvcSponsorTrafficDeps;
+    if (!trafficMode) {
+      return undefined;
     }
+    const client: MvcSponsorV2DirectUploadClient = input.createMvcSponsorClient
+      ? input.createMvcSponsorClient()
+      : createMvcSponsorV2Client({ baseUrl: await trafficAccountService.getConfiguredTrafficApiBase() });
+    client.traffic = mvcSponsorTrafficDeps;
     return client;
   }
   async function updateConfigDefaultWriteNetwork(
@@ -17624,6 +17700,16 @@ export function createDefaultMetabotDaemonHandlers(input: {
         if (!request.to || !request.content) {
           return commandFailed('invalid_chat_request', 'Private chat request must include to and content.');
         }
+        // Format-validate the recipient before any chain work: an invalid
+        // globalMetaId and a nonexistent one are very different user errors,
+        // and without this check both surface as "no chat public key on
+        // chain", which reads like the peer's problem.
+        if (request.to !== state.identity.globalMetaId && !validateGlobalMetaId(request.to)) {
+          return commandFailed(
+            'invalid_recipient_metaid',
+            `"${request.to}" is not a valid globalMetaId. Expected the id-prefixed on-chain identity, e.g. idq1t6w8….`,
+          );
+        }
 
         let privateChatIdentity;
         try {
@@ -17650,6 +17736,12 @@ export function createDefaultMetabotDaemonHandlers(input: {
           });
           if (outcome.status === 'found') {
             peerChatPublicKey = outcome.chatPublicKey;
+          } else if (outcome.status === 'not_found') {
+            return commandFailed(
+              'peer_not_found',
+              `No MetaID exists on chain for "${request.to}". Check the recipient's globalMetaId and try again.`,
+              { data: { target: request.to } },
+            );
           } else if (outcome.status === 'unreachable') {
             const cachedConversation = await createA2AConversationStore({
               paths: actor.runtimeStateStore.paths,
@@ -17861,11 +17953,55 @@ export function createDefaultMetabotDaemonHandlers(input: {
             localGlobalMetaId,
             limit: 100,
           });
+          const conversations = mergeStoredPrivateChatsWithA2A({
+            localGlobalMetaId,
+            stored: state.conversations,
+            summaries: listed.conversations,
+          });
+          // turnCount counts auto-reply turns only, so it reads as "1" for a
+          // hand-written 5-message conversation. Surface the real message
+          // count: stored private-chat messages merged (max) with the A2A
+          // transcript count for the same peer.
+          const storedCounts = new Map<string, number>();
+          for (const message of state.messages) {
+            const key = normalizeText(message.conversationId);
+            storedCounts.set(key, (storedCounts.get(key) ?? 0) + 1);
+          }
+          const summaryCountByPeer = new Map<string, number>();
+          for (const summary of listed.conversations) {
+            const key = normalizeText(summary.peerGlobalMetaId).toLowerCase();
+            summaryCountByPeer.set(key, Math.max(summaryCountByPeer.get(key) ?? 0, Number(summary.messageCount) || 0));
+          }
+          // Resolve on-chain /info/name for peers whose display name is not
+          // known locally; failures keep the stored value (usually null).
+          const namelessPeers = new Set<string>();
+          for (const conversation of conversations) {
+            const peerGlobalMetaId = normalizeText(conversation.peerGlobalMetaId);
+            // Only well-formed ids are worth a gateway round-trip (and this
+            // keeps test fixtures with placeholder ids fully offline).
+            if (!normalizeText(conversation.peerName) && validateGlobalMetaId(peerGlobalMetaId)) {
+              namelessPeers.add(peerGlobalMetaId);
+            }
+          }
+          const nameByPeer = new Map<string, string>();
+          await Promise.all([...namelessPeers].map(async (peerGlobalMetaId) => {
+            const name = await lookupMetaIdDisplayName(peerGlobalMetaId, {
+              chainApiBaseUrl: input.chainApiBaseUrl,
+            }).catch(() => null);
+            if (name) {
+              nameByPeer.set(peerGlobalMetaId, name);
+            }
+          }));
           return commandSuccess({
-            conversations: mergeStoredPrivateChatsWithA2A({
-              localGlobalMetaId,
-              stored: state.conversations,
-              summaries: listed.conversations,
+            conversations: conversations.map((conversation) => {
+              const storedCount = storedCounts.get(normalizeText(conversation.conversationId)) ?? 0;
+              const summaryCount = summaryCountByPeer.get(normalizeText(conversation.peerGlobalMetaId).toLowerCase()) ?? 0;
+              const resolvedName = nameByPeer.get(normalizeText(conversation.peerGlobalMetaId));
+              return {
+                ...conversation,
+                ...(resolvedName ? { peerName: resolvedName } : {}),
+                messageCount: Math.max(storedCount, summaryCount),
+              };
             }),
           });
         } catch {

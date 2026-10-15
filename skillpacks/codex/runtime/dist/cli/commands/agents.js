@@ -15,6 +15,9 @@ const helpers_1 = require("./helpers");
 const SUPPORTED_HOOK_HOSTS = ['claude-code'];
 async function runAgentsCommand(args, context) {
     const section = args[0];
+    if (!section || section.startsWith('--')) {
+        return (0, commandResult_1.commandFailed)('missing_subcommand', 'Usage: metabot agents <status|hooks>. Commands: status, hooks install, hooks uninstall, hooks doctor.');
+    }
     if (section === 'status') {
         const handler = context.dependencies.agents?.status;
         if (!handler)

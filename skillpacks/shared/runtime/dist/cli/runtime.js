@@ -79,6 +79,7 @@ const profileNameResolution_1 = require("../core/identity/profileNameResolution"
 const ownerIdentity_1 = require("../core/owner/ownerIdentity");
 const skillResolver_1 = require("../core/skills/skillResolver");
 const paths_1 = require("../core/state/paths");
+const mvcPendingUtxos_1 = require("../core/chain/mvcPendingUtxos");
 const store_1 = require("../core/chainhistory/store");
 const readLedger_1 = require("../core/chainhistory/readLedger");
 const memoryStore_1 = require("../core/memory/memoryStore");
@@ -187,6 +188,26 @@ const llmRuntimeExecution_1 = require("../core/llm/llmRuntimeExecution");
 const update_1 = require("../core/system/update");
 const uninstall_1 = require("../core/system/uninstall");
 const DEFAULT_DAEMON_BASE_URL = 'http://127.0.0.1:10001';
+// Repeated-failure log throttle: background loops (private-chat backfill,
+// peer directory) retry on a schedule, so an outage would otherwise print
+// the same warn line every pass. Identical scope+message collapses to one
+// line per window.
+const throttledWarnAt = new Map();
+function warnThrottled(scope, message, windowMs = 5 * 60_000) {
+    const key = `${scope}::${message}`;
+    const last = throttledWarnAt.get(key) ?? 0;
+    const now = Date.now();
+    if (now - last < windowMs)
+        return;
+    throttledWarnAt.set(key, now);
+    if (throttledWarnAt.size > 500) {
+        for (const [entryKey, entryAt] of throttledWarnAt.entries()) {
+            if (now - entryAt >= windowMs)
+                throttledWarnAt.delete(entryKey);
+        }
+    }
+    console.warn(scope, message);
+}
 const DEFAULT_DAEMON_HOST = '127.0.0.1';
 const DEFAULT_DAEMON_START_TIMEOUT_MS = 30_000;
 const DAEMON_START_POLL_INTERVAL_MS = 100;
@@ -5629,6 +5650,12 @@ async function serveCliDaemonProcess(context) {
     });
     const paths = (0, paths_1.resolveMetabotPaths)(homeDir);
     const daemonPaths = (0, paths_1.resolveMetabotDaemonPaths)(systemHomeDir);
+    // Cross-process pending-UTXO journal (shares the file the CLI processes
+    // use): daemon-side writes and CLI-side transfers constrain each other's
+    // UTXO selection while explorer views lag behind a broadcast.
+    (0, mvcPendingUtxos_1.configurePendingMvcUtxoPersistence)({
+        journalPath: node_path_1.default.join(daemonPaths.runtimeRoot, 'pending-mvc-utxos.json'),
+    });
     const infrastructureConfigStore = (0, infrastructureConfigStore_1.createInfrastructureConfigStore)(daemonPaths);
     const daemonStore = (0, daemonStateStore_1.createDaemonStateStore)(daemonPaths);
     let daemonRecord = null;
@@ -6630,7 +6657,7 @@ async function serveCliDaemonProcess(context) {
                 peerDirectoryCache.set(key, { peers, expiresAt: Date.now() + 60_000 });
             }).catch((error) => {
                 peerDirectoryCache.set(key, { peers: cached?.peers ?? [], expiresAt: Date.now() + 30_000 });
-                console.warn(`[private chat peer directory:${key}]`, error instanceof Error ? error.message : String(error));
+                warnThrottled(`[private chat peer directory:${key}]`, error instanceof Error ? error.message : String(error));
             }).finally(() => {
                 peerDirectoryPending.delete(key);
             });
@@ -6691,7 +6718,7 @@ async function serveCliDaemonProcess(context) {
                     return profileAutoReplyDispatcher.retryPendingInboundMessage(profile, peerGlobalMetaId);
                 },
                 onError: (error) => {
-                    console.warn(`[private chat auto-reply backfill:${profile.slug}]`, error.message);
+                    warnThrottled(`[private chat auto-reply backfill:${profile.slug}]`, error instanceof Error ? error.message : String(error));
                 },
             });
         },

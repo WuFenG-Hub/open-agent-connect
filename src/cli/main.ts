@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
+import path from 'node:path';
 import { commandFailed, commandSuccess, type MetabotCommandResult } from '../core/contracts/commandResult';
+import { DAEMON_LOCK_TIMEOUT_CODE } from '../daemon';
+import { configurePendingMvcUtxoPersistence } from '../core/chain/mvcPendingUtxos';
+import { normalizeSystemHomeDir } from '../core/state/homeSelection';
+import { resolveMetabotDaemonPaths } from '../core/state/paths';
 import { CLI_VERSION } from './version';
 import { runDaemonCommand } from './commands/daemon';
 import { runDoctorCommand } from './commands/doctor';
@@ -48,8 +53,10 @@ import { createCliRuntimeContext, type CliContext } from './types';
 import { mergeCliDependencies, serveCliDaemonProcess } from './runtime';
 
 function resolveExitCode(result: MetabotCommandResult<unknown>): number {
-  if (result.ok) return 0;
-  if (result.state === 'waiting' || result.state === 'manual_action_required') return 2;
+  if (result.ok && result.state === 'success') return 0;
+  // Awaiting confirmation is a deliberate pause, not success: scripts must
+  // be able to tell "needs --confirm" apart from "done" (exit 0).
+  if (result.state === 'awaiting_confirmation' || result.state === 'waiting' || result.state === 'manual_action_required') return 2;
   return 1;
 }
 
@@ -79,6 +86,15 @@ function writeResolvedVersion(
 export async function runCli(argv: string[], cliContext: CliContext = {}): Promise<number> {
   const context = createCliRuntimeContext(cliContext);
   context.dependencies = mergeCliDependencies(context);
+  // Cross-process pending-UTXO journal: a wallet transfer in this CLI process
+  // must immediately constrain UTXO selection in the daemon (and vice versa)
+  // — explorer views lag several seconds behind a broadcast.
+  configurePendingMvcUtxoPersistence({
+    journalPath: path.join(
+      resolveMetabotDaemonPaths(normalizeSystemHomeDir(context.env, context.cwd)).runtimeRoot,
+      'pending-mvc-utxos.json',
+    ),
+  });
 
   const [command, ...rest] = argv;
   let result: MetabotCommandResult<unknown>;
@@ -237,6 +253,17 @@ if (require.main === module) {
     void serveCliDaemonProcess({
       env: process.env,
       cwd: process.cwd(),
+    }).catch((error: unknown) => {
+      // The serve process must never die on an unhandled rejection: daemon
+      // stop/start races and concurrent CLI auto-starts routinely lose the
+      // daemon lock, and a stack-trace crash hides that the winner is fine.
+      const code = (error as { code?: unknown } | undefined)?.code;
+      if (code === DAEMON_LOCK_TIMEOUT_CODE) {
+        console.error('[daemon serve] another daemon holds the lock — leaving it running, this process exits.');
+        process.exit(0);
+      }
+      console.error('[daemon serve] failed:', error instanceof Error ? error.message : String(error));
+      process.exit(1);
     });
   } else {
     void runCli(argv).then((exitCode) => {

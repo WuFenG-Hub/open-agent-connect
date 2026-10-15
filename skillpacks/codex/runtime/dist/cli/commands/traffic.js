@@ -35,7 +35,7 @@ async function runTrafficCommand(args, context) {
         return traffic?.status ? traffic.status() : trafficNotImplemented('status');
     }
     if (subcommand === 'mode') {
-        const mode = args[1];
+        const mode = args.slice(1).find((arg) => arg !== '--json');
         if (mode === undefined) {
             return traffic?.getMode ? traffic.getMode() : trafficNotImplemented('mode');
         }

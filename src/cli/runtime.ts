@@ -62,6 +62,7 @@ import {
   resolveMetabotPaths,
   type MetabotPaths,
 } from '../core/state/paths';
+import { configurePendingMvcUtxoPersistence } from '../core/chain/mvcPendingUtxos';
 import { createChainHistoryStore, type ChainHistorySearchOptions } from '../core/chainhistory/store';
 import { recordMetawebPinRead } from '../core/chainhistory/readLedger';
 import { createMemoryStore } from '../core/memory/memoryStore';
@@ -346,6 +347,25 @@ import { runSystemUninstall } from '../core/system/uninstall';
 import type { CliDependencies, CliRuntimeContext } from './types';
 
 const DEFAULT_DAEMON_BASE_URL = 'http://127.0.0.1:10001';
+
+// Repeated-failure log throttle: background loops (private-chat backfill,
+// peer directory) retry on a schedule, so an outage would otherwise print
+// the same warn line every pass. Identical scope+message collapses to one
+// line per window.
+const throttledWarnAt = new Map<string, number>();
+function warnThrottled(scope: string, message: string, windowMs = 5 * 60_000): void {
+  const key = `${scope}::${message}`;
+  const last = throttledWarnAt.get(key) ?? 0;
+  const now = Date.now();
+  if (now - last < windowMs) return;
+  throttledWarnAt.set(key, now);
+  if (throttledWarnAt.size > 500) {
+    for (const [entryKey, entryAt] of throttledWarnAt.entries()) {
+      if (now - entryAt >= windowMs) throttledWarnAt.delete(entryKey);
+    }
+  }
+  console.warn(scope, message);
+}
 const DEFAULT_DAEMON_HOST = '127.0.0.1';
 const DEFAULT_DAEMON_START_TIMEOUT_MS = 30_000;
 const DAEMON_START_POLL_INTERVAL_MS = 100;
@@ -6589,6 +6609,12 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   });
   const paths = resolveMetabotPaths(homeDir);
   const daemonPaths = resolveMetabotDaemonPaths(systemHomeDir);
+  // Cross-process pending-UTXO journal (shares the file the CLI processes
+  // use): daemon-side writes and CLI-side transfers constrain each other's
+  // UTXO selection while explorer views lag behind a broadcast.
+  configurePendingMvcUtxoPersistence({
+    journalPath: path.join(daemonPaths.runtimeRoot, 'pending-mvc-utxos.json'),
+  });
   const infrastructureConfigStore = createInfrastructureConfigStore(daemonPaths);
   const daemonStore = createDaemonStateStore(daemonPaths);
   let daemonRecord: GlobalDaemonRecord | null = null;
@@ -7626,7 +7652,7 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         peerDirectoryCache.set(key, { peers, expiresAt: Date.now() + 60_000 });
       }).catch((error) => {
         peerDirectoryCache.set(key, { peers: cached?.peers ?? [], expiresAt: Date.now() + 30_000 });
-        console.warn(
+        warnThrottled(
           `[private chat peer directory:${key}]`,
           error instanceof Error ? error.message : String(error),
         );
@@ -7704,7 +7730,10 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
           );
         },
         onError: (error) => {
-          console.warn(`[private chat auto-reply backfill:${profile.slug}]`, error.message);
+          warnThrottled(
+            `[private chat auto-reply backfill:${profile.slug}]`,
+            error instanceof Error ? error.message : String(error),
+          );
         },
       });
     },
