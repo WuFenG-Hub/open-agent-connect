@@ -116,3 +116,105 @@ function fakeContentHost(bodies) {
     });
   };
 }
+
+/** A fake response whose DECLARED size (content-length) is far over the cap.
+ *  Tracks whether the body was ever read, which is the whole point: the cap
+ *  must bound what this proxy DOWNLOADS, not just what it keeps. */
+function declaredOversizeResponse(declaredBytes) {
+  let read = false;
+  return {
+    wasRead: () => read,
+    response: {
+      ok: true,
+      headers: { get: (name) => (String(name).toLowerCase() === 'content-length' ? String(declaredBytes) : null) },
+      arrayBuffer: async () => {
+        read = true;
+        return new ArrayBuffer(0);
+      },
+    },
+  };
+}
+
+test('proxy: an oversize DECLARED body is rejected before it is downloaded', async () => {
+  const pin = 'e'.repeat(64) + 'i0';
+  const fake = declaredOversizeResponse(64 * 1024 * 1024);
+  const result = await fetchMetafileContent(`metafile://${pin}`, { fetchImpl: async () => fake.response });
+  assert.equal(result, null, 'a body declared far over the cap must not be served');
+  assert.equal(fake.wasRead(), false, 'the cap must reject BEFORE the body is buffered');
+});
+
+test('proxy: a declared size under the cap still resolves', async () => {
+  const pin = 'f'.repeat(64) + 'i0';
+  const payload = Buffer.from('small inline artifact');
+  const fake = {
+    response: {
+      ok: true,
+      headers: {
+        get: (name) => (String(name).toLowerCase() === 'content-length'
+          ? String(payload.length)
+          : 'text/plain'),
+      },
+      arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length),
+    },
+  };
+  const result = await fetchMetafileContent(`metafile://${pin}`, { fetchImpl: async () => fake.response });
+  assert.ok(result, 'an honestly-declared small artifact must resolve');
+  assert.equal(result.body.toString('utf8'), 'small inline artifact');
+});
+
+test('proxy: a response with no declared size still resolves when actually small', async () => {
+  const pin = '0'.repeat(63) + '1i0';
+  const payload = Buffer.from('undeclared but small');
+  const fake = {
+    response: {
+      ok: true,
+      headers: { get: () => null },
+      arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length),
+    },
+  };
+  const result = await fetchMetafileContent(`metafile://${pin}`, { fetchImpl: async () => fake.response });
+  assert.ok(result, 'a missing content-length must NOT be treated as oversize');
+  assert.equal(result.body.toString('utf8'), 'undeclared but small');
+});
+
+test('proxy: a lying (under-declared) body is still caught by the post-read check', async () => {
+  const pin = '1'.repeat(63) + '2i0';
+  const oversize = new ArrayBuffer(32 * 1024 * 1024 + 1);
+  const fake = {
+    response: {
+      ok: true,
+      headers: { get: (name) => (String(name).toLowerCase() === 'content-length' ? '16' : null) },
+      arrayBuffer: async () => oversize,
+    },
+  };
+  const result = await fetchMetafileContent(`metafile://${pin}`, { fetchImpl: async () => fake.response });
+  assert.equal(result, null, 'an under-declared oversize body must still be rejected');
+});
+
+test('proxy: a manifest declaring an oversize fileSize is rejected before chunks are fetched', async () => {
+  const pin = '2'.repeat(63) + '3i0';
+  let chunkFetched = false;
+  const manifest = {
+    sha256: 'a'.repeat(64),
+    fileSize: 512 * 1024 * 1024,
+    chunkNumber: 2,
+    chunkSize: 256 * 1024 * 1024,
+    dataType: 'application/gzip',
+    name: 'huge.tar.gz',
+    chunkList: [{ sha256: 'b'.repeat(64), pinId: '3'.repeat(63) + '4i0' }],
+  };
+  const fake = async (url) => {
+    if (String(url).includes('3'.repeat(63) + '4i0')) chunkFetched = true;
+    return {
+      ok: true,
+      headers: { get: () => 'application/json' },
+      arrayBuffer: async () => {
+        const buf = Buffer.from(JSON.stringify(manifest));
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+      },
+    };
+  };
+  const result = await fetchMetafileContent(`metafile://${pin}`, { fetchImpl: fake });
+  assert.equal(result, null, 'a manifest declaring an oversize artifact must not be served');
+  assert.equal(chunkFetched, false, 'chunks must not be fetched once the declared size is over the cap');
+});
