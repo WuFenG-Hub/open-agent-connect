@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  composeSurfReportMarkdown,
   emptySurfRunStats,
   type MetawebSurfRunRecord,
   type MetawebSurfRunStats,
@@ -393,7 +394,9 @@ export class SurfService {
       await this.store.finishRun(runId, {
         status: 'done',
         stats,
-        reportMarkdown: reportMarkdown ? `${reportMarkdown}\n\n---\n\n${digest}` : digest,
+        // Composed rather than concatenated here: the report is capped on its
+        // own budget first, so the digest is never what the cap cuts.
+        reportMarkdown: composeSurfReportMarkdown(reportMarkdown, digest),
         reportJson,
         finishedAtIso: nowIso,
       });
