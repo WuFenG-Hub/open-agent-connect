@@ -109,6 +109,10 @@ export interface CliDependencies {
     /** Advance the zero-touch onboarding pipeline in the daemon (idempotent). */
     runOnboarding?: () => Awaitable<MetabotCommandResult<unknown>>;
   };
+  owner?: {
+    /** Sign + publish the device→owner /info/owner binding pin (daemon-backed). */
+    bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;

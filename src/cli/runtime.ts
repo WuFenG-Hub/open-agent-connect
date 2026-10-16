@@ -4257,6 +4257,11 @@ return {
       update: async (input) => requestJson(context, 'POST', '/api/user/update', input),
       runOnboarding: async () => requestJson(context, 'POST', '/api/user/onboarding', {}),
     },
+    owner: {
+      // bind-device publishes the device→owner /info/owner pin daemon-side
+      // (signer + traffic sponsor hook live there); the CLI only forwards.
+      bindDevice: async () => requestJson(context, 'POST', '/api/owner/bind-device', {}),
+    },
     network: {
       listServices: async (input) => {
         const query = new URLSearchParams();

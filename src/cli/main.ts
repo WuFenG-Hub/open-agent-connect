@@ -11,6 +11,7 @@ import { runDaemonCommand } from './commands/daemon';
 import { runDoctorCommand } from './commands/doctor';
 import { runIdentityCommand } from './commands/identity';
 import { runUserCommand } from './commands/user';
+import { runOwnerCommand } from './commands/owner';
 import { runNetworkCommand } from './commands/network';
 import { runProviderCommand } from './commands/provider';
 import { runServicesCommand } from './commands/services';
@@ -135,6 +136,9 @@ export async function runCli(argv: string[], cliContext: CliContext = {}): Promi
           break;
         case 'user':
           result = await runUserCommand(rest, context);
+          break;
+        case 'owner':
+          result = await runOwnerCommand(rest, context);
           break;
         case 'network':
           result = await runNetworkCommand(rest, context);

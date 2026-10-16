@@ -2,6 +2,13 @@
 
 **Date:** 2026-10-16
 **Status:** Draft — in implementation on branch `feat-trust-tiers`
+**(updated 2026-10-16): P1 landed** — Owner Identity CRUD
+(`src/core/owner/rootOwnerIdentity.ts`), device→owner binding publish
+(`src/core/owner/deviceOwnerBinding.ts`), root-owner resolver + trust cache
+(`src/core/trust/`), `metabot owner` CLI + `/api/owner/*` daemon routes,
+`07-owner-binding.md` generalized semantics, and this storage amendment.
+Not yet landed: P2 simpletrust grants, P3 tier resolver, P4 enforcement,
+P5 final CLI naming.
 
 ## Goal
 
@@ -272,9 +279,23 @@ pending ). Slow files are added to `INTEGRATION_FILES` in
 ## Open Questions
 
 1. Fee source for device/owner pin publishing (subsidy reuse vs explicit
-   micro top-up) — resolved in P1/P2.
+   micro top-up) — **P1 decision (subsidy-first with actionable fallback)**:
+   `bind-device` requests the idempotent MVC gas subsidy for the device
+   address before publishing (`requestMvcGasSubsidy`, the same service
+   onboarding uses); a subsidy failure does not abort (the wallet may
+   already be funded), but when the subsequent write then fails, the error
+   tells the user exactly that the device wallet needs a manual top-up.
+   Pin writes also bill the traffic sponsor hook first whenever the daemon
+   has one, same as owner `/info/name` pins.
 2. CLI naming: keep `metabot user *` operating on the device identity and add
-   `metabot owner *` for the root owner? Final naming in P5.
+   `metabot owner *` for the root owner? Final naming in P5. (P1 ships the
+   minimal `metabot owner create|import|who|rename|reveal|exists|path|bind-device`
+   surface; naming revision stays open.)
 3. Whether `contact` C2 scope (group-task context only) needs an explicit
    sandbox-path allow-list in the executor, or the existing work-dir
    convention is sufficient — resolved in P3.
+4. Trust-cache staleness policy (P1): a cache hit inside a 5-minute TTL is
+   served without any chain read; misses/expires re-walk and store the new
+   pinIds; `invalidate(subject)` drops entries event-driven. Whether P4
+   enforcement needs sub-TTL invalidation on binding-change events is
+   decided when the enforcement points land.

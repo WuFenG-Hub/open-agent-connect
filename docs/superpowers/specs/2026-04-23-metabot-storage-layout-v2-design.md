@@ -986,3 +986,45 @@ Rules:
 - no secrets: the file sits next to `owner/identity.json` purely for
   locality, and is normalized defensively on read (unknown enum values fall
   back to `pending`, missing fields to their defaults).
+
+## Amendment 2026-10-16: Trust Tiers Owner Layer (Device / Owner / Trust State)
+
+This amendment adds the identity + trust state of the trust tiers design
+(`2026-10-16-trust-tiers-permission-matrix-design.md`, P1) to the existing
+machine-wide `owner/` section. The current `owner/identity.json` is
+**semantically renamed the Device Identity** (the per-machine MetaID every
+Bot binds to); the physical path, record shape, and every existing Bot
+`/info/owner` pin are unchanged — no data migration. On top of it sits the
+new **Owner Identity**: the human's portable identity, created/imported
+explicitly (never auto-provisioned), at most one per machine.
+
+### `owner/` additions
+
+- `root-owner-identity.json` (0600) — the Owner Identity record. Same shape
+  as `identity.json` (`OwnerIdentityRecord`: mnemonic, derivation path,
+  keys, addresses, globalMetaId, name, timestamps). A device binds to its
+  owner by publishing an `/info/owner` pin from the *device* identity whose
+  payload embeds this record's signature (`07-owner-binding.md`, generalized
+  semantics).
+- `trust-cache.json` (0600) — resolved `/info/owner` walks keyed by subject
+  GlobalMetaID: `{ version: 1, entries: { [gmid]: { subjectGlobalMetaId,
+  pinId, rootOwnerGlobalMetaId, chain, resolvedAt } } }`. `pinId` is the
+  latest binding pin the entry is based on (null = no pin), so an entry is
+  stale exactly when a newer binding pin lands; reads are defensive (a
+  corrupt file resolves to empty) and writes are atomic write-then-rename.
+- `trust-local.json` — **reserved** (P2): device-level blocklist + explicit
+  contacts (`{ "blocked": [gmid…], "contacts": [gmid…] }`). On-chain
+  `simpleblock` replaces/merges this in M2.
+- `team-registry.json` — **reserved** (P4/P5): remote team Bot gmids added
+  manually (`metabot team add`, verifies the root owner on-chain before
+  recording) or auto-recorded after interacting with a verified team peer.
+
+Rules:
+
+- all writes are atomic (write-then-rename), matching the `owner/` file
+  conventions above; secret-bearing files are 0600
+- all paths are resolved through the central owner path model
+  (`resolveMetabotOwnerPaths` in `src/core/state/paths.ts`), which is
+  machine-wide like the daemon paths — these are NOT per-profile paths
+- the reserved files are named here so later phases land without another
+  layout amendment; nothing writes them in P1

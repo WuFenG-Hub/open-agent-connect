@@ -374,3 +374,32 @@ export function resolveMetabotDaemonPaths(systemHomeDir: string): MetabotDaemonP
     migrationStatePath: path.join(recoveryRoot, 'migration.json'),
   };
 }
+
+/**
+ * Machine-wide owner-layer state paths (trust tiers design; storage-layout
+ * v2 amendment 2026-10-16). These live under `~/.metabot/owner/` next to
+ * the existing device identity (`identity.json`); they are intentionally
+ * NOT part of the per-profile MetabotPaths model.
+ */
+export interface MetabotOwnerPaths {
+  systemHomeDir: string;
+  ownerRoot: string;
+  /** The existing machine-wide identity record; semantically the Device Identity. */
+  deviceIdentityPath: string;
+  /** The human's portable Owner Identity record (0600, at most one per machine). */
+  rootOwnerIdentityPath: string;
+  /** Resolved root owners keyed by subject GlobalMetaID, invalidated by pinId changes. */
+  trustCachePath: string;
+}
+
+export function resolveMetabotOwnerPaths(systemHomeDir: string): MetabotOwnerPaths {
+  const normalizedSystemHomeDir = normalizeInputHomeDir(systemHomeDir);
+  const ownerRoot = path.join(normalizedSystemHomeDir, '.metabot', 'owner');
+  return {
+    systemHomeDir: normalizedSystemHomeDir,
+    ownerRoot,
+    deviceIdentityPath: path.join(ownerRoot, 'identity.json'),
+    rootOwnerIdentityPath: path.join(ownerRoot, 'root-owner-identity.json'),
+    trustCachePath: path.join(ownerRoot, 'trust-cache.json'),
+  };
+}

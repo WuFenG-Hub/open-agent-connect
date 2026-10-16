@@ -221,6 +221,7 @@ import { createMetaTaskDaemonHandlers } from './metataskHandlers';
 import { createMetasoPinVerifier } from '../core/grouptask/deliverableVerification';
 import { createScheduleDaemonHandlers } from './scheduleHandlers';
 import { createUserDaemonHandlers } from './userHandlers';
+import { createOwnerDaemonHandlers } from './ownerHandlers';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -15033,6 +15034,15 @@ export function createDefaultMetabotDaemonHandlers(input: {
       resolveSponsorWritePin,
       trafficAccountService,
       ownerOnboardingRunner,
+    }),
+    // Root Owner Identity (trust tiers P1): the `metabot owner *` CLI surface
+    // over HTTP. bindDevice reuses the same adapters + traffic sponsor hook as
+    // user update so the device→owner /info/owner pin bills exactly like the
+    // owner /info/name pin (traffic-sponsored first, subsidy self-pay fallback).
+    owner: createOwnerDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      adapters,
+      resolveSponsorWritePin,
     }),
     network: {
       listServices: async ({ online, query, cached }) => {

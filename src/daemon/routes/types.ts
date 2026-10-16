@@ -178,6 +178,18 @@ export interface MetabotDaemonHttpHandlers {
     /** Advance the onboarding pipeline on demand (idempotent, shared runner). */
     runOnboarding?: () => Awaitable<MetabotCommandResult<unknown>>;
   };
+  /** Root Owner Identity (the `metabot owner *` CLI surface, trust tiers P1):
+   *  the human's portable machine-wide identity above the Device Identity.
+   *  create/import also return the mnemonic (shown once). */
+  owner?: {
+    who?: () => Awaitable<MetabotCommandResult<unknown>>;
+    create?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    import?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    rename?: (input: { name: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Sign (root owner key) + publish (device identity) the /info/owner
+     *  device->owner binding pin. */
+    bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;
