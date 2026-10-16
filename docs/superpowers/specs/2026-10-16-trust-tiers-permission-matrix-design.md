@@ -7,8 +7,14 @@
 (`src/core/owner/deviceOwnerBinding.ts`), root-owner resolver + trust cache
 (`src/core/trust/`), `metabot owner` CLI + `/api/owner/*` daemon routes,
 `07-owner-binding.md` generalized semantics, and this storage amendment.
-Not yet landed: P2 simpletrust grants, P3 tier resolver, P4 enforcement,
-P5 final CLI naming.
+**(updated 2026-10-16): P2 landed** — on-chain trust grants
+(`/protocols/simpletrust` build/parse/publish/resolve + cache in
+`src/core/trust/`, protocol doc `09-simpletrust.md`), local block/contact
+store (`trust-local.json`), contact evidence from private-chat state,
+`metabot trust` + `metabot block` CLIs with `/api/trust/*` + `/api/block/*`
+daemon routes, and a generalized non-profile identity pin publisher
+(`identityChainPublisher.ts`).
+Not yet landed: P3 tier resolver, P4 enforcement, P5 final CLI naming.
 
 ## Goal
 

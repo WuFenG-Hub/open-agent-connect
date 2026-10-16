@@ -390,6 +390,8 @@ export interface MetabotOwnerPaths {
   rootOwnerIdentityPath: string;
   /** Resolved root owners keyed by subject GlobalMetaID, invalidated by pinId changes. */
   trustCachePath: string;
+  /** Device-level blocklist + explicit contacts (P2 of the trust tiers design). */
+  trustLocalPath: string;
 }
 
 export function resolveMetabotOwnerPaths(systemHomeDir: string): MetabotOwnerPaths {
@@ -401,5 +403,6 @@ export function resolveMetabotOwnerPaths(systemHomeDir: string): MetabotOwnerPat
     deviceIdentityPath: path.join(ownerRoot, 'identity.json'),
     rootOwnerIdentityPath: path.join(ownerRoot, 'root-owner-identity.json'),
     trustCachePath: path.join(ownerRoot, 'trust-cache.json'),
+    trustLocalPath: path.join(ownerRoot, 'trust-local.json'),
   };
 }

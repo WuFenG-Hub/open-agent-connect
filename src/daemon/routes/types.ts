@@ -190,6 +190,22 @@ export interface MetabotDaemonHttpHandlers {
      *  device->owner binding pin. */
     bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
   };
+  /** On-chain owner trust grants (`metabot trust *`, trust tiers P2):
+   *  grant/revoke publish /protocols/simpletrust pins from the root owner;
+   *  list resolves the effective set (grants minus revokes) from chain. */
+  trust?: {
+    list?: () => Awaitable<MetabotCommandResult<unknown>>;
+    grant?: (input: { trustedOwner: string; note?: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    revoke?: (input: { target: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
+  /** Device-level blocklist (`metabot block *`, trust tiers P2): local
+   *  `~/.metabot/owner/trust-local.json`; add/remove also invalidate the
+   *  peer's cached trust resolution. */
+  block?: {
+    list?: () => Awaitable<MetabotCommandResult<unknown>>;
+    add?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    remove?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;

@@ -179,6 +179,7 @@ export function createRootOwnerResolver(input: CreateRootOwnerResolverInput = {}
 /** Fallback when neither systemHomeDir nor a cache is provided (library/test use). */
 function createMemoryTrustCacheStore(): TrustCacheStore {
   const entries = new Map<string, TrustCacheEntry>();
+  const grants = new Map<string, import('./trustCacheStore').TrustGrantCacheEntry>();
   return {
     async get(subjectGlobalMetaId) {
       return entries.get(subjectGlobalMetaId) ?? null;
@@ -189,8 +190,18 @@ function createMemoryTrustCacheStore(): TrustCacheStore {
     async invalidate(subjectGlobalMetaId) {
       entries.delete(subjectGlobalMetaId);
     },
+    async getGrants(ownerGlobalMetaId) {
+      return grants.get(ownerGlobalMetaId) ?? null;
+    },
+    async setGrants(entry) {
+      grants.set(entry.ownerGlobalMetaId, entry);
+    },
+    async invalidateGrants(ownerGlobalMetaId) {
+      grants.delete(ownerGlobalMetaId);
+    },
     async clear() {
       entries.clear();
+      grants.clear();
     },
   };
 }

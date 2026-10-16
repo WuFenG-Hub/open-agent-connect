@@ -7,13 +7,11 @@
 // the subject — the protocol's generalized semantics: the /info/owner of X
 // is the identity directly accountable for X.
 //
-// Funding: pin writes cost micro-fees on MVC. Publishing requests the
-// idempotent MVC gas subsidy for the device address first (same service the
-// onboarding pipeline uses; "address already rewarded" counts as success) —
-// but a subsidy failure does NOT abort the write, because the device wallet
-// may already be funded. Only when the write itself then fails do we surface
-// a combined, actionable funding error.
+// The broadcast itself (subsidy attempt + chain write + actionable funding
+// error) is the shared identityChainPublisher machinery, so a non-profile
+// identity (device or root owner) signs and pays for its own pins.
 import type { ChainWriteResult } from '../chain/writePin';
+import { IdentityPinPublishError, publishIdentityPin } from './identityChainPublisher';
 import { OWNER_BINDING_PATH, signOwnerBinding } from './ownerBinding';
 import type { OwnerIdentityRecord } from './ownerIdentity';
 import type { RequestMvcGasSubsidyOptions, RequestMvcGasSubsidyResult } from '../subsidy/requestMvcGasSubsidy';
@@ -64,50 +62,27 @@ export async function publishDeviceOwnerBinding(input: {
 
   const { payload } = await signOwnerBinding(input.rootOwner, deviceGlobalMetaId);
 
-  let subsidy: DeviceOwnerBindingSubsidyOutcome = { requested: false, success: false };
-  if (input.requestSubsidy) {
-    let outcome: RequestMvcGasSubsidyResult;
-    try {
-      outcome = await input.requestSubsidy({
-        mvcAddress: input.device.mvcAddress,
-        mnemonic: input.device.mnemonic,
-        path: input.device.path,
-      });
-    } catch (error) {
-      outcome = { success: false, error: error instanceof Error ? error.message : String(error) };
-    }
-    subsidy = {
-      requested: true,
-      success: outcome.success === true,
-      ...(outcome.error ? { error: outcome.error } : {}),
-    };
-  }
-
-  let chainWrite: ChainWriteResult;
   try {
-    chainWrite = await input.signer.writePin({
-      operation: 'create',
-      path: OWNER_BINDING_PATH,
-      contentType: 'application/json',
-      payload,
-      encoding: 'utf-8',
-      encryption: '0',
-      version: '1.0',
-      network: 'mvc',
+    const { chainWrite, subsidy } = await publishIdentityPin({
+      identity: input.device,
+      signer: input.signer,
+      requestSubsidy: input.requestSubsidy,
+      request: {
+        operation: 'create',
+        path: OWNER_BINDING_PATH,
+        contentType: 'application/json',
+        payload,
+        encoding: 'utf-8',
+        encryption: '0',
+        version: '1.0',
+        network: 'mvc',
+      },
     });
+    return { payload, chainWrite, subsidy };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (subsidy.requested && !subsidy.success) {
-      throw new DeviceOwnerBindingError(
-        'chain_write_failed',
-        `Publishing the device→owner binding pin failed (${message}) and the MVC gas subsidy could not fund `
-        + `the device address${subsidy.error ? ` (${subsidy.error})` : ''}. Top up the device MVC wallet `
-        + `(${input.device.mvcAddress}) with a small amount of SPACE and retry.`,
-        { subsidyError: subsidy.error },
-      );
+    if (error instanceof IdentityPinPublishError) {
+      throw new DeviceOwnerBindingError(error.code, error.message, error.details);
     }
-    throw new DeviceOwnerBindingError('chain_write_failed', message, { subsidyError: subsidy.error });
+    throw error;
   }
-
-  return { payload, chainWrite, subsidy };
 }

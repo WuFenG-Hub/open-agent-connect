@@ -222,6 +222,8 @@ import { createMetasoPinVerifier } from '../core/grouptask/deliverableVerificati
 import { createScheduleDaemonHandlers } from './scheduleHandlers';
 import { createUserDaemonHandlers } from './userHandlers';
 import { createOwnerDaemonHandlers } from './ownerHandlers';
+import { createTrustDaemonHandlers } from './trustHandlers';
+import { createBlockDaemonHandlers } from './blockHandlers';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -15043,6 +15045,17 @@ export function createDefaultMetabotDaemonHandlers(input: {
       systemHomeDir: normalizedSystemHomeDir,
       adapters,
       resolveSponsorWritePin,
+    }),
+    // On-chain trust grants + device blocklist (trust tiers P2). grant/revoke
+    // reuse the owner signer + traffic sponsor hook; block is pure local state
+    // whose add/remove drops the peer's cached trust resolution.
+    trust: createTrustDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      adapters,
+      resolveSponsorWritePin,
+    }),
+    block: createBlockDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
     }),
     network: {
       listServices: async ({ online, query, cached }) => {

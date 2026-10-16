@@ -1012,8 +1012,13 @@ explicitly (never auto-provisioned), at most one per machine.
   latest binding pin the entry is based on (null = no pin), so an entry is
   stale exactly when a newer binding pin lands; reads are defensive (a
   corrupt file resolves to empty) and writes are atomic write-then-rename.
-- `trust-local.json` — **reserved** (P2): device-level blocklist + explicit
-  contacts (`{ "blocked": [gmid…], "contacts": [gmid…] }`). On-chain
+  P2 extended the same file with a `grants` section: effective
+  `/protocols/simpletrust` sets keyed by the GRANTING owner's gmid
+  (`{ [ownerGmid]: { ownerGlobalMetaId, pinId, trustedOwners, resolvedAt } }`).
+- `trust-local.json` (0600; P2) — device-level blocklist + explicit
+  contacts (`{ "blocked": [gmid…], "contacts": [gmid…] }`), normalized
+  defensively on read (deduped, invalid gmids dropped). Block changes also
+  drop the peer's `trust-cache.json` entry so tier checks re-resolve. On-chain
   `simpleblock` replaces/merges this in M2.
 - `team-registry.json` — **reserved** (P4/P5): remote team Bot gmids added
   manually (`metabot team add`, verifies the root owner on-chain before

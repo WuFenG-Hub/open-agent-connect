@@ -180,3 +180,98 @@ export function createOwnerPinReader(options?: OwnerPinReadOptions): OwnerPinRea
     return { pinId: row.pinId, payload };
   };
 }
+
+// ---------------------------------------------------------------------------
+// Paged author-pin listing (P2): the trust-grant resolution needs ALL pins an
+// author published at one path (grants AND revoke pins), newest first —
+// unlike the single-latest-pin reader above.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_LIST_PAGE_SIZE = 100;
+const DEFAULT_LIST_MAX_PAGES = 5;
+
+export interface AuthorPathPin {
+  pinId: string;
+  operation: string;
+  /** Unix seconds; 0 when unknown. */
+  timestamp: number;
+  /** Full pin body; null when empty/unreadable (callers treat as absent). */
+  payload: string | null;
+}
+
+/** Injectable seam: every pin `globalMetaId` published at `path`, newest first. */
+export type OwnerPathPinLister = (globalMetaId: string, path: string) => Promise<AuthorPathPin[]>;
+
+async function listAuthorPinRows(
+  address: string,
+  path: string,
+  options: OwnerPathPinListOptions | undefined,
+  resolved: ResolvedOwnerPinReadOptions,
+): Promise<AuthorPinListRow[]> {
+  const rows: AuthorPinListRow[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  const size = Math.max(1, Math.min(100, Math.floor(options?.pageSize ?? DEFAULT_LIST_PAGE_SIZE)));
+  const maxPages = Math.max(1, Math.floor(options?.maxPages ?? DEFAULT_LIST_MAX_PAGES));
+  for (let page = 0; page < maxPages; page += 1) {
+    const url = new URL(`${resolved.baseUrl}/api/address/pin/list/${encodeURIComponent(address)}`);
+    url.searchParams.set('path', path);
+    url.searchParams.set('size', String(size));
+    if (cursor) url.searchParams.set('cursor', cursor);
+    const body = await fetchJson(url.toString(), resolved);
+    if (!body) break;
+    const data = readObject(body.data);
+    if (!data || Number(body.code) !== 1) break;
+    const list = Array.isArray(data.list) ? data.list : [];
+    if (list.length === 0) break;
+    for (const raw of list) {
+      const row = normalizeListRow(raw);
+      if (!row || row.path !== path) continue;
+      if (row.operation === 'revoke' || row.operation === 'delete' || row.operation === 'deleted') continue;
+      if (seen.has(row.pinId)) continue;
+      seen.add(row.pinId);
+      rows.push(row);
+    }
+    const nextCursor = text(data.nextCursor);
+    cursor = nextCursor || undefined;
+    if (!cursor) break;
+  }
+  return rows;
+}
+
+export interface OwnerPathPinListOptions extends OwnerPinReadOptions {
+  pageSize?: number;
+  maxPages?: number;
+}
+
+/**
+ * All pins an author published at `path` (grants and revoke payloads alike;
+ * operation-level revoked rows carry no payload and are skipped), each with
+ * its full body fetched by pinId. Read failures degrade to fewer pins —
+ * resolution treats a failed read as "nothing more to fold", same as an
+ * absent author.
+ */
+export async function listAuthorPathPins(
+  globalMetaId: string,
+  path: string,
+  options?: OwnerPathPinListOptions,
+): Promise<AuthorPathPin[]> {
+  const resolved = resolveOptions(options);
+  const normalizedPath = text(path);
+  const normalizedGmid = text(globalMetaId).toLowerCase();
+  if (!normalizedPath || !normalizedGmid) return [];
+  const address = await resolveMetaIdOwnerAddress(normalizedGmid, options);
+  if (!address) return [];
+  const rows = await listAuthorPinRows(address, normalizedPath, options, resolved);
+  const pins: AuthorPathPin[] = [];
+  for (const row of rows) {
+    const payload = await fetchOwnerPinContent(row.pinId, options);
+    pins.push({ pinId: row.pinId, operation: row.operation, timestamp: row.timestamp, payload });
+  }
+  return pins;
+}
+
+/** Default OwnerPathPinLister delegating to listAuthorPathPins. */
+export function createOwnerPathPinLister(options?: OwnerPathPinListOptions): OwnerPathPinLister {
+  return (globalMetaId: string, path: string) => listAuthorPathPins(globalMetaId, path, options);
+}

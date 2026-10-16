@@ -113,6 +113,14 @@ export interface CliDependencies {
     /** Sign + publish the device→owner /info/owner binding pin (daemon-backed). */
     bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
   };
+  trust?: {
+    /** Resolve the local owner's effective trust set from chain (grants minus revokes). */
+    list?: () => Awaitable<MetabotCommandResult<unknown>>;
+    /** Publish one /protocols/simpletrust grant pin from the root owner. */
+    grant?: (input: { trustedOwner: string; note?: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Publish revoke pin(s) for an owner GlobalMetaID or grant pinId. */
+    revoke?: (input: { target: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;

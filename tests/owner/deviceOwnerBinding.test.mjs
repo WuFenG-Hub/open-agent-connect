@@ -146,7 +146,7 @@ test('failed subsidy + failed write surfaces an actionable funding error', async
       assert.equal(error.code, 'chain_write_failed');
       assert.match(error.message, /insufficient funds for pin fee/);
       assert.match(error.message, /MVC gas subsidy could not fund/);
-      assert.match(error.message, /Top up the device MVC wallet/);
+      assert.match(error.message, /Top up the identity MVC wallet/);
       assert.match(error.message, new RegExp(device.mvcAddress.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       return true;
     },

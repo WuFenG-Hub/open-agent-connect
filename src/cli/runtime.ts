@@ -4262,6 +4262,13 @@ return {
       // (signer + traffic sponsor hook live there); the CLI only forwards.
       bindDevice: async () => requestJson(context, 'POST', '/api/owner/bind-device', {}),
     },
+    trust: {
+      // grant/revoke publish /protocols/simpletrust pins daemon-side (owner
+      // signer + sponsor hook live there); list resolves from chain there.
+      list: async () => requestJson(context, 'GET', '/api/trust/list'),
+      grant: async (input) => requestJson(context, 'POST', '/api/trust/grant', input),
+      revoke: async (input) => requestJson(context, 'POST', '/api/trust/revoke', input),
+    },
     network: {
       listServices: async (input) => {
         const query = new URLSearchParams();
