@@ -31,8 +31,10 @@ import {
 } from '../core/services/skillCapabilityClasses';
 import {
   normalizeChatTrustPolicy,
+  evaluatePeerPolicy,
   type ChatTrustPolicyConfig,
 } from '../core/trust/trustPolicy';
+import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
 import { bindHostSkills, bindPlatformSkills, HostSkillBindingError } from '../core/host/hostSkillBinding';
 import {
   bindHostPersonaProjection,
@@ -4627,6 +4629,9 @@ return {
         setArchived: post('/api/grouptask/archive'),
         invite: post('/api/grouptask/invite'),
         invites: get('/api/grouptask/invites'),
+        invitesPending: post('/api/grouptask/invites/pending'),
+        invitesApprove: post('/api/grouptask/invites/approve'),
+        invitesDecline: post('/api/grouptask/invites/decline'),
         collabs: get('/api/grouptask/collabs'),
         collabMessages: get('/api/grouptask/collab-messages'),
         health: get('/api/grouptask/health'),
@@ -7952,6 +7957,11 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   const groupTaskEngineLog = createGroupTaskEngineLogWriter({
     logFile: resolveGroupTaskEngineLogPath(daemonPaths.logsRoot),
   });
+  // Trust-tier resolver for group-task team seating + the invite policy
+  // (trust tiers P4b): one shared instance per runtime, injected into the
+  // service context (remote seating by gmid) and the engine options
+  // (invite auto/queue/decline gate per inviter).
+  const groupTaskPeerTrustResolver = createPeerTrustResolver({ systemHomeDir });
   // Deliverable uploads are workspace-scoped and fail-closed: a local file
   // reaches the chain only from inside the acting Bot's profile home. Paths
   // injected into guest replies by remote members are refused here.
@@ -7975,6 +7985,22 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   const groupTaskEngine = createGroupTaskEngine({
     verifyPin: createMetasoPinVerifier(),
     uploadDeliverableFile: gatedDeliverableUpload,
+    evaluatePeerInvitePolicy: async (inviterGlobalMetaId, guestProfile) => {
+      const profileRecord = await getMetabotProfile(systemHomeDir, guestProfile.slug).catch(() => null);
+      const profileConfig = await createConfigStore(guestProfile.homeDir).read().catch(() => null);
+      const evaluation = await evaluatePeerPolicy({
+        peerGlobalMetaId: inviterGlobalMetaId,
+        profile: {
+          allowChatSkills: profileRecord?.allowChatSkills,
+          skillClassOverrides: profileConfig?.trust.skillClassOverrides,
+          chatTrustPolicy: profileConfig?.trust.chatTrustPolicy,
+        },
+        context: 'invite',
+        systemHomeDir,
+        tierResolver: groupTaskPeerTrustResolver,
+      });
+      return { tier: evaluation.tier, acceptBehavior: evaluation.acceptBehavior };
+    },
     ctx: createGroupTaskServiceContext({
       systemHomeDir,
       createSignerForProfileHome: (profileHomeDir) => (profileHomeDir === homeDir
@@ -7982,6 +8008,7 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         : createLocalMnemonicSigner({ secretStore: createFileSecretStore(profileHomeDir), adapters, resolveSponsorWritePin })),
       adapters,
       resolvePeerChatPublicKey,
+      peerTrustTierResolver: groupTaskPeerTrustResolver,
       log: (message) => {
         console.warn(message);
         groupTaskEngineLog(message);

@@ -17642,6 +17642,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
       resolveSponsorWritePin,
       resolvePeerChatPublicKey,
       verifyPin: createMetasoPinVerifier(),
+      peerTrustTierResolver,
       log: (message) => console.warn(message),
     }),
     metatask: createMetaTaskDaemonHandlers({

@@ -2884,7 +2884,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
       { name: 'pin', summary: 'Pin a task to the top of the list (unpin to revert).' },
       { name: 'archive', summary: 'Archive a task locally (unarchive to revert).' },
       { name: 'invite', summary: 'Invite a remote Bot via OpenTeam (private-message handshake).' },
-      { name: 'invites', summary: 'List OpenTeam invites sent for a task.' },
+      { name: 'invites', summary: 'List OpenTeam invites sent for a task — or the guest-side approval surface: `invites list|approve|decline` for invites the trust policy held (stranger tier).' },
       { name: 'collabs', summary: 'List external OpenTeam collaborations local Bots joined as guests.' },
       { name: 'collab-messages', summary: 'Read-only transcript of a guest OpenTeam group.' },
       { name: 'health', summary: 'Preflight snapshot: chair/owner prerequisites, listener switch, task counts, recent engine log.' },
@@ -2963,7 +2963,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     ],
     optionalFlags: [
       { flag: '--acceptance', value: '<text>', description: 'Acceptance criteria shown in the kickoff message.' },
-      { flag: '--workers', value: '<slug,slug>', description: 'Comma-separated worker Bot profile slugs.' },
+      { flag: '--workers', value: '<slug,slug|gmid,gmid>', description: 'Comma-separated worker references: local profile slugs and/or remote team Bot GlobalMetaIDs (a gmid is seated only at trust tier team, else creation fails with worker_not_team).' },
       { flag: '--chair', value: '<bot-slug>', description: 'Explicit chair Bot; defaults to the machine twin.' },
       HELP_JSON_FLAG,
     ],

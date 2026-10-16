@@ -21,9 +21,15 @@ import path from 'node:path';
 import type { MetabotPaths } from '../state/paths';
 
 export type OpenTeamInviteStatus = 'pending' | 'accepted' | 'declined' | 'expired';
-export type OpenTeamGuestInviteStatus = 'invited' | 'accepted' | 'declined' | 'skipped' | 'expired';
+export type OpenTeamGuestInviteStatus = 'invited' | 'accepted' | 'declined' | 'skipped' | 'expired'
+  // Trust tiers P4b: a stranger's invite is held for human approval instead of
+  // auto-accepted (or silently dropped when blocked → 'declined').
+  | 'pending_approval';
 export type OpenTeamMembershipStatus = 'active' | 'left';
 export type OpenTeamLeftCause = 'kick' | 'self_check' | 'opt_out';
+
+/** How a remote membership came to be: plain OpenTeam guest, or team seating. */
+export type OpenTeamMemberVia = 'openteam' | 'team';
 
 export interface OpenTeamInviteRecord {
   id: number;
@@ -46,6 +52,8 @@ export interface OpenTeamInviteRecord {
   respondedAt: number | null;
   /** Set once the remote member row was added to the task (join confirmed). */
   memberAddedAt: number | null;
+  /** 'team' when seated as a verified team Bot from task creation (P4b). */
+  via?: OpenTeamMemberVia | null;
 }
 
 export interface OpenTeamGuestInviteRecord {
@@ -86,6 +94,8 @@ export interface OpenTeamMembershipRecord {
   leftAt: number | null;
   leftCause: OpenTeamLeftCause | null;
   leftReason: string | null;
+  /** 'team' when the guest auto-accepted at team tier (P4b); null for legacy rows. */
+  via?: OpenTeamMemberVia | null;
 }
 
 export interface OpenTeamStateFile {
@@ -109,6 +119,8 @@ export interface CreateOpenTeamInviteInput {
   requiredSkills?: string[];
   sentPinId?: string | null;
   expiresAt: number;
+  /** 'team' for team-seated remote workers (P4b); default null (plain guest). */
+  via?: OpenTeamMemberVia | null;
 }
 
 export interface CreateOpenTeamGuestInviteInput {
@@ -135,6 +147,7 @@ export interface CreateOpenTeamMembershipInput {
   goalSummary?: string | null;
   inviteId: string;
   joinedPinId?: string | null;
+  via?: OpenTeamMemberVia | null;
 }
 
 export interface OpenTeamStore {
@@ -248,6 +261,7 @@ export function createOpenTeamStore(paths: MetabotPaths): OpenTeamStore {
         createdAt: Date.now(),
         respondedAt: null,
         memberAddedAt: null,
+        via: input.via ?? null,
       };
       state.invites.push(record);
       return record;
@@ -289,7 +303,7 @@ export function createOpenTeamStore(paths: MetabotPaths): OpenTeamStore {
         declineReason: input.declineReason ?? null,
         joinedPinId: input.joinedPinId ?? null,
         createdAt: Date.now(),
-        respondedAt: input.status === 'invited' ? null : Date.now(),
+        respondedAt: (input.status === 'invited' || input.status === 'pending_approval') ? null : Date.now(),
       };
       state.guestInvites.push(record);
       return record;
@@ -331,6 +345,7 @@ export function createOpenTeamStore(paths: MetabotPaths): OpenTeamStore {
         leftAt: null,
         leftCause: null,
         leftReason: null,
+        via: input.via ?? null,
       };
       // Unique (groupId, slug): re-inviting a left member reactivates the row.
       const existing = state.memberships.find(
@@ -349,6 +364,7 @@ export function createOpenTeamStore(paths: MetabotPaths): OpenTeamStore {
           leftAt: null,
           leftCause: null,
           leftReason: null,
+          via: record.via ?? existing.via ?? null,
         });
         return { ...existing };
       }

@@ -392,6 +392,8 @@ export interface MetabotOwnerPaths {
   trustCachePath: string;
   /** Device-level blocklist + explicit contacts (P2 of the trust tiers design). */
   trustLocalPath: string;
+  /** Remote team Bot gmids (P4b candidates; P5 `metabot team add` populates). */
+  teamRegistryPath: string;
 }
 
 export function resolveMetabotOwnerPaths(systemHomeDir: string): MetabotOwnerPaths {
@@ -404,5 +406,6 @@ export function resolveMetabotOwnerPaths(systemHomeDir: string): MetabotOwnerPat
     rootOwnerIdentityPath: path.join(ownerRoot, 'root-owner-identity.json'),
     trustCachePath: path.join(ownerRoot, 'trust-cache.json'),
     trustLocalPath: path.join(ownerRoot, 'trust-local.json'),
+    teamRegistryPath: path.join(ownerRoot, 'team-registry.json'),
   };
 }

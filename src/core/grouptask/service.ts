@@ -13,7 +13,8 @@ import { createGroupTaskRelayStore, type GroupTaskRelayStore } from './relayStor
 import { createOpenTeamStore, type OpenTeamStore } from './openteamStore';
 import { createStaffingStore, type StaffingStore } from './staffingStore';
 import { recordKickImpression, recordTaskCloseImpressions } from './impressions';
-import { buildOpenTeamKickMessage } from './openteam';
+import { buildOpenTeamKickMessage, buildOpenTeamInviteMessage, generateOpenTeamInviteId, OPENTEAM_INVITE_TTL_SECONDS } from './openteam';
+import { normalizeGlobalMetaId } from '../identity/deriveIdentity';
 import {
   createGroupOnChain,
   fetchGroupMembers,
@@ -121,6 +122,12 @@ export interface GroupTaskServiceContext {
   verifyPin?: PinVerifier;
   transport?: GroupTaskTransportOptions;
   log?(message: string): void;
+  /**
+   * Trust-tier resolver seam (trust tiers P4b): required for seating REMOTE
+   * team workers by GlobalMetaID in createGroupTask. Absent = any gmid worker
+   * reference fails with a clear error (fail closed).
+   */
+  resolvePeerTrustTier?: (globalMetaId: string) => Promise<import('../trust/capabilityClasses').PeerTrustTier>;
 }
 
 export class GroupTaskServiceError extends Error {
@@ -139,6 +146,71 @@ function storeFor(ctx: GroupTaskServiceContext, profile: GroupTaskProfileRef): G
 export function openteamStoreFor(ctx: GroupTaskServiceContext, profile: GroupTaskProfileRef): OpenTeamStore {
   if (ctx.openteamStoreForProfile) return ctx.openteamStoreForProfile(profile);
   return createOpenTeamStore(resolveMetabotPaths(profile.homeDir));
+}
+
+const TEAM_SEAT_GOAL_SUMMARY_MAX_CHARS = 200;
+
+/**
+ * Send the OpenTeam invite for a remote team seat (trust tiers P4b). Thinner
+ * than inviteRemoteMember: createGroupTask has already validated the task,
+ * the chair, and the tier — here we only deliver the envelope and record the
+ * invite row (via 'team'). Idempotent per (task, pending invite).
+ */
+async function sendTeamSeatInvite(
+  ctx: GroupTaskServiceContext,
+  chair: GroupTaskProfileRef,
+  task: { id: number; title: string; goal: string },
+  groupId: string,
+  globalMetaId: string,
+): Promise<void> {
+  if (!ctx.sendPrivateMessage) {
+    throw new GroupTaskServiceError(
+      'openteam_unavailable',
+      'Private-message sending is not wired in this context; OpenTeam invites are unavailable',
+    );
+  }
+  const chairGmid = (chair.globalMetaId ?? '').trim();
+  if (!chairGmid) {
+    throw new GroupTaskServiceError('chair_identity_missing', `Chair ${chair.slug} has no GlobalMetaID`);
+  }
+  const openteam = openteamStoreFor(ctx, chair);
+  const existing = (await openteam.listInvites(task.id)).find(
+    (invite) => invite.inviteeGlobalMetaId.toLowerCase() === globalMetaId
+      && invite.status === 'pending',
+  );
+  if (existing) return;
+
+  const inviteId = generateOpenTeamInviteId();
+  const expiresAt = Math.floor(Date.now() / 1000) + OPENTEAM_INVITE_TTL_SECONDS;
+  const plaintext = buildOpenTeamInviteMessage({
+    v: 1,
+    inviteId,
+    groupId,
+    taskTitle: task.title,
+    goalSummary: task.goal.trim().slice(0, TEAM_SEAT_GOAL_SUMMARY_MAX_CHARS),
+    requiredSkills: [],
+    inviterGlobalMetaId: chairGmid,
+    inviterName: chair.name.trim() || chair.slug,
+    chairGlobalMetaId: chairGmid,
+    targetGlobalMetaId: globalMetaId,
+    expiresAt,
+  });
+  const sent = await ctx.sendPrivateMessage({
+    fromSlug: chair.slug,
+    toGlobalMetaId: globalMetaId,
+    content: plaintext,
+  });
+  await openteam.createInvite({
+    taskId: task.id,
+    groupId,
+    inviteId,
+    inviteeGlobalMetaId: globalMetaId,
+    inviteeName: null,
+    requiredSkills: [],
+    sentPinId: sent.pinId ?? null,
+    expiresAt,
+    via: 'team',
+  });
 }
 
 const staffingStoreCache = new Map<string, StaffingStore>();
@@ -368,11 +440,52 @@ export async function createGroupTask(
   const store = storeFor(ctx, chair);
   const chairName = chair.name.trim() || chair.slug;
 
-  const workerSlugs = [...new Set(
+  const workerRefs = [...new Set(
     (input.workerSlugs ?? [])
-      .map((slug) => slug.trim())
-      .filter((slug) => slug && slug !== chair.slug),
+      .map((ref) => ref.trim())
+      .filter((ref) => ref && ref !== chair.slug),
   )];
+
+  // Split worker references: local slugs (existing path, byte-for-byte) and
+  // remote team Bot GlobalMetaIDs (trust tiers P4b). Remote gmid references
+  // are pre-validated BEFORE any chain work and only accepted at tier 'team'
+  // (fail closed with a clear error otherwise).
+  const localWorkerSlugs: string[] = [];
+  const remoteTeamSeats: Array<{ globalMetaId: string; seatRole: string | null }> = [];
+  for (const ref of workerRefs) {
+    const gmid = normalizeGlobalMetaId(ref);
+    if (!gmid) {
+      localWorkerSlugs.push(ref);
+      continue;
+    }
+    if (!ctx.resolvePeerTrustTier) {
+      throw new GroupTaskServiceError(
+        'team_seating_unavailable',
+        `Worker ${ref} is a remote GlobalMetaID, but the trust-tier resolver is not wired in this context.`,
+      );
+    }
+    let tier: string;
+    try {
+      tier = await ctx.resolvePeerTrustTier(gmid);
+    } catch (error) {
+      throw new GroupTaskServiceError(
+        'team_tier_resolution_failed',
+        `Could not verify the trust tier of remote worker ${gmid}: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (tier !== 'team') {
+      throw new GroupTaskServiceError(
+        'worker_not_team',
+        `Remote worker ${gmid} is not a verified team Bot (trust tier: ${tier}). `
+        + 'Only team-tier remote Bots may be seated by GlobalMetaID.',
+      );
+    }
+    remoteTeamSeats.push({
+      globalMetaId: gmid,
+      seatRole: input.seatRoles?.[ref]?.trim() || null,
+    });
+  }
 
   const chairSigner = await ctx.signerForSlug(chair.slug);
   const { groupId, pinId } = await createGroupOnChain(chairSigner, {
@@ -410,7 +523,21 @@ export async function createGroupTask(
   const memberNames: string[] = [];
   const seatedWorkers: Array<{ slug: string }> = [];
   const skippedWorkers: GroupTaskSkippedWorker[] = [];
-  for (const workerSlug of workerSlugs) {
+  // Remote team seats: roster rows land BEFORE any invite send (same
+  // planning-turn rationale as local seats) and are marked via 'team'.
+  for (const seat of remoteTeamSeats) {
+    await store.addMember({
+      taskId: task.id,
+      slug: null,
+      globalMetaId: seat.globalMetaId,
+      role: 'worker',
+      displayName: seat.globalMetaId,
+      ...(seat.seatRole ? { seatRole: seat.seatRole } : {}),
+      via: 'team',
+    });
+    memberNames.push(seat.globalMetaId);
+  }
+  for (const workerSlug of localWorkerSlugs) {
     const worker = await ctx.getProfile(workerSlug);
     if (!worker) {
       log(`[GroupTask] Member profile ${workerSlug} not found; skipped`);
@@ -452,6 +579,19 @@ export async function createGroupTask(
       // A member join failure must not fail the whole creation.
       log(
         `[GroupTask] joinGroup failed for member ${worker.slug} in task ${task.id}: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // Remote team seats: deliver the OpenTeam invite through the existing
+  // transport. Degradation-tolerant like member joins.
+  for (const seat of remoteTeamSeats) {
+    try {
+      await sendTeamSeatInvite(ctx, chair, task, groupId, seat.globalMetaId);
+    } catch (error) {
+      log(
+        `[GroupTask] Team-seat invite failed for ${seat.globalMetaId} in task ${task.id}: `
         + `${error instanceof Error ? error.message : String(error)}`,
       );
     }
@@ -572,7 +712,7 @@ export async function listGroupTaskSummaries(
 }
 
 /** Trusted identity set for suspect marking: active members + the owner. */
-async function buildTrustedGmidSet(
+export async function buildTrustedGmidSet(
   ctx: GroupTaskServiceContext,
   members: GroupTaskMember[],
 ): Promise<Set<string>> {

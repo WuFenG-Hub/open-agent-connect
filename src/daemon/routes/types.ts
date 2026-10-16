@@ -322,6 +322,12 @@ export interface MetabotDaemonHttpHandlers {
     setArchived?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     invite?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     invites?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Guest-side pending invites across profiles (trust tiers P4b). */
+    invitesPending?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Approve a pending guest invite (join + ACCEPT + mark inviter contact). */
+    invitesApprove?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Decline a pending guest invite and notify the inviter. */
+    invitesDecline?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     collabs?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     collabMessages?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     health?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;

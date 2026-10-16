@@ -246,12 +246,32 @@ stranger ≈ friendly chat only; blocked = silence.
    route); `blocked` is silently declined. Approving a stranger invite
    records the inviter as a contact.
    **Behavior change: strangers are no longer silently auto-accepted.**
+   **Status: implemented (P4b, 2026-10-16).** The gate runs after the
+   existing validation (target/sender/member/expiry/on-chain chair check)
+   through the `evaluatePeerInvitePolicy` engine seam (context `invite`;
+   evaluator failures hold the invite as stranger-pending, never crash the
+   tick). Pending invites are `pending_approval` guest-invite rows; `approve`
+   re-validates expiry, runs the shared accept path (sign join → membership →
+   ACCEPT reply), and `markContact`s the inviter; `decline` records the
+   decision and sends the decline envelope; blocked stays silent
+   (declined/blocked, no reply).
 3. **Group-task team seating** (`grouptask/service.createGroupTask`): workers
    may be remote team Bots referenced by gmid (verified same root owner). They
    join through the existing OpenTeam transport but are recorded with
    `via: 'team'` and treated as first-class members in
    `buildTrustedGmidSet`/UI. The staffing slate may propose team Bots from the
    team registry.
+   **Status: implemented (P4b, 2026-10-16).** `createGroupTask` accepts gmid
+   worker references, pre-validates tier == 'team' BEFORE any chain write
+   (clear errors `worker_not_team` / `team_seating_unavailable` /
+   `team_tier_resolution_failed`), seats the roster row (`slug: null`,
+   `via: 'team'`) before the invite send, and delivers the OpenTeam invite
+   through the existing transport (invite rows carry `via: 'team'`; the
+   guest-side membership records `via: 'team'` on team-tier auto-accepts;
+   `buildTrustedGmidSet` already treats every member gmid as trusted).
+   `staffingService.createFromProposal` appends verified team-registry gmids
+   (`~/.metabot/owner/team-registry.json`, tolerant of absence) as seating
+   candidates.
 4. **Service orders**: unchanged in M1. The tier resolver is the documented
    hook for M2 caller authorization (paid strangers, free calls for team, etc.).
 
