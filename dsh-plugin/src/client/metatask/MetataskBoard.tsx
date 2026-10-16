@@ -155,7 +155,7 @@ export function MetataskBoard(
         <div className="oac-mt-alerts">
           {(board?.alerts ?? []).slice(0, 4).map((alert, index) => (
             <div key={`${alert.rootPinId}-${alert.kind}-${index}`} className="oac-mt-alert">
-              <span className="oac-mt-alert-kind">{mt(`mtAlert_${alert.kind.replace(/_/g, '_')}`)}</span>
+              <span className="oac-mt-alert-kind">{mt(`mtAlert_${alert.kind}`)}</span>
               <span className="oac-mt-alert-node">{alert.node ? `${shortPin(alert.rootPinId)} · ${alert.node}` : shortPin(alert.rootPinId)}</span>
               <button type="button" className="oac-mt-btn oac-mt-btn-sm" onClick={() => { onOpen(alert.rootPinId) }}>
                 {mt('mtAlertOpen')}

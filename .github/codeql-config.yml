@@ -1,0 +1,18 @@
+name: "OAC CodeQL config"
+
+# Keep the alert list signal-rich: generated artifacts and vendored bundles
+# dwarf first-party findings. Every dist/ finding is mirrored into six
+# skillpacks/<pack>/runtime/dist copies (a 6x alert multiplier), the root
+# dist/ is the compiled copy of src/, and test fixtures exercise
+# sanitization and URL handling on purpose. First-party sources under
+# src/, dsh-plugin/src/, SKILLs/ stay in scope.
+paths-ignore:
+  # Build output mirrored per skill pack (six copies of every dist finding).
+  - 'skillpacks/**'
+  # Root build output — the compiled copy of src/.
+  - 'dist/**'
+  # Test fixtures exercise sanitization and URL handling on purpose.
+  - 'tests/**'
+  - 'dsh-plugin/tests/**'
+  # Vendored third-party UI bundles (e.g. idframework vendors/metaid.js).
+  - '**/vendors/**'
