@@ -12,7 +12,9 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  composeSurfReportMarkdown,
   emptySurfRunStats,
+  surfSessionDidSomething,
   type MetawebSurfRunRecord,
   type MetawebSurfRunStats,
   type MetawebSurfSeenAction,
@@ -69,6 +71,11 @@ export interface SurfSessionResult {
   reportJson?: string | null;
   /** Per-pin actions reported by the session, folded into the seen ledger. */
   seenActions?: Array<{ pinId: string; action: MetawebSurfSeenAction }>;
+  /** Set by the producer when the session was cut short (step ceiling,
+   *  watchdog timeout, LLM outage) instead of reaching its final report. A
+   *  truncated run that also produced no verifiable activity must not consume
+   *  the seen ledger — see the guard in runSurf. */
+  truncated?: string | null;
 }
 
 export interface SurfServiceDeps {
@@ -342,6 +349,16 @@ export class SurfService {
         reportMarkdown = session.reportMarkdown ?? null;
         reportJson = session.reportJson ?? null;
         sessionSeenActions.push(...(session.seenActions ?? []));
+        // A run the producer cut short (step ceiling, watchdog timeout, LLM
+        // outage) that ALSO produced no verifiable activity must not consume the
+        // window: the ledger writes below are what stop these pins from ever
+        // being presented again, so it fails here like any other failure and the
+        // next surf re-presents the same window. A truncated run that did work
+        // keeps its receipts, and a completed run that happened to do nothing is
+        // a legitimate quiet surf — both still settle as 'done'.
+        if (session.truncated && !surfSessionDidSomething(stats)) {
+          throw new Error(`surf session was truncated (${session.truncated}) with no verifiable activity`);
+        }
       }
 
       // Seen-ledger writes land ONLY on this success path: every briefed pin
@@ -393,7 +410,9 @@ export class SurfService {
       await this.store.finishRun(runId, {
         status: 'done',
         stats,
-        reportMarkdown: reportMarkdown ? `${reportMarkdown}\n\n---\n\n${digest}` : digest,
+        // Composed rather than concatenated here: the report is capped on its
+        // own budget first, so the digest is never what the cap cuts.
+        reportMarkdown: composeSurfReportMarkdown(reportMarkdown, digest),
         reportJson,
         finishedAtIso: nowIso,
       });
