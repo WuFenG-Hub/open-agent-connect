@@ -18,6 +18,7 @@ const pathsFor = (label) => {
     tasksPath: path.join(root, 'tasks.json'),
     subtasksPath: path.join(root, 'subtasks.json'),
     eventsPath: path.join(root, 'events.json'),
+    nudgeStatePath: path.join(root, 'nudge-state.json'),
   };
 };
 

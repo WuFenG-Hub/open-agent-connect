@@ -39,6 +39,7 @@ export interface LongTermStorePaths {
   tasksPath: string;
   subtasksPath: string;
   eventsPath: string;
+  nudgeStatePath: string;
 }
 
 /** A stored sub-task carries its owning task id. */
@@ -57,6 +58,16 @@ export interface LongTermBoardCard {
 interface TasksFile { version: number; tasks: LongTermTask[] }
 interface SubtasksFile { version: number; subtasks: LongTermStoredSubtask[] }
 interface EventsFile { version: number; events: LongTermEvent[] }
+
+/** Planner bookkeeping per task: what we already nudged, and when the owner was last seen. */
+export interface LongTermNudgeState {
+  taskId: string;
+  lastNudgeAtMs: number;
+  /** The newest journal event already seen when we nudged. */
+  lastNudgedEventAtMs: number;
+  lastOwnerActivityAtMs: number | null;
+}
+interface NudgeStateFile { version: number; states: LongTermNudgeState[] }
 
 const TASK_STAGES: readonly LongTermTaskStage[] = ['defining', 'active', 'paused', 'done', 'cancelled'];
 const SUBTASK_STATUSES: readonly LongTermSubtaskStatus[] = [
@@ -103,6 +114,8 @@ export interface LongTermStore {
     detail?: string | null; at: string;
   }): Promise<LongTermEvent>;
   listEvents(taskId: string): Promise<LongTermEvent[]>;
+  getNudgeState(taskId: string): Promise<LongTermNudgeState | null>;
+  setNudgeState(taskId: string, state: Omit<LongTermNudgeState, 'taskId'>): Promise<LongTermNudgeState>;
   /** The board: every task with its column, progress and current sub-task. */
   getBoard(): Promise<LongTermBoardCard[]>;
 }
@@ -138,6 +151,7 @@ export function createLongTermStore(paths: LongTermStorePaths): LongTermStore {
   const emptyTasks = (): TasksFile => ({ version: FILE_VERSION, tasks: [] });
   const emptySubtasks = (): SubtasksFile => ({ version: FILE_VERSION, subtasks: [] });
   const emptyEvents = (): EventsFile => ({ version: FILE_VERSION, events: [] });
+  const emptyNudgeState = (): NudgeStateFile => ({ version: FILE_VERSION, states: [] });
 
   const readTasks = (): Promise<TasksFile> => readJsonFile(paths.tasksPath, emptyTasks, (raw) => ({
     version: FILE_VERSION,
@@ -159,6 +173,18 @@ export function createLongTermStore(paths: LongTermStorePaths): LongTermStore {
       }).map((row) => ({ ...row, dependsOn: Array.isArray(row.dependsOn) ? row.dependsOn : [] }))
       : [],
   }));
+
+  const readNudgeStates = (): Promise<NudgeStateFile> => readJsonFile(
+    paths.nudgeStatePath, emptyNudgeState, (raw) => ({
+      version: FILE_VERSION,
+      states: Array.isArray(raw.states)
+        ? (raw.states as unknown[]).filter((entry): entry is LongTermNudgeState => {
+          const row = entry as Partial<LongTermNudgeState> | null;
+          return !!row && typeof row.taskId === 'string' && typeof row.lastNudgeAtMs === 'number';
+        })
+        : [],
+    }),
+  );
 
   const readEvents = (): Promise<EventsFile> => readJsonFile(paths.eventsPath, emptyEvents, (raw) => ({
     version: FILE_VERSION,
@@ -324,6 +350,23 @@ export function createLongTermStore(paths: LongTermStorePaths): LongTermStore {
         detail: input.detail ?? null,
         at: input.at,
       }));
+    },
+
+    async getNudgeState(taskId) {
+      const file = await readNudgeStates();
+      return file.states.find((state) => state.taskId === taskId) ?? null;
+    },
+
+    async setNudgeState(taskId, state) {
+      return enqueue(async () => {
+        const file = await readNudgeStates();
+        const existing = file.states.findIndex((entry) => entry.taskId === taskId);
+        const next: LongTermNudgeState = { taskId, ...state };
+        if (existing >= 0) file.states[existing] = next;
+        else file.states.push(next);
+        await writeJsonAtomic(paths.nudgeStatePath, file);
+        return next;
+      });
     },
 
     async listEvents(taskId) {
