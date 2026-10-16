@@ -101,6 +101,12 @@ function buildMetabotPaths(input) {
         surfProtocolStatePath: node_path_1.default.join(input.runtimeRoot, 'surf', 'protocol-state.json'),
         surfSeenPinsPath: node_path_1.default.join(input.runtimeRoot, 'surf', 'seen-pins.json'),
         surfSettingsPath: node_path_1.default.join(input.runtimeRoot, 'surf', 'settings.json'),
+        // Per-bot long-term task store (`.runtime/longterm/`).
+        longtermRoot: node_path_1.default.join(input.runtimeRoot, 'longterm'),
+        longtermTasksPath: node_path_1.default.join(input.runtimeRoot, 'longterm', 'tasks.json'),
+        longtermSubtasksPath: node_path_1.default.join(input.runtimeRoot, 'longterm', 'subtasks.json'),
+        longtermEventsPath: node_path_1.default.join(input.runtimeRoot, 'longterm', 'events.json'),
+        longtermNudgeStatePath: node_path_1.default.join(input.runtimeRoot, 'longterm', 'nudge-state.json'),
         // LLM paths.
         llmRoot: input.llmRoot,
         llmRuntimesPath: input.llmRuntimesPath,

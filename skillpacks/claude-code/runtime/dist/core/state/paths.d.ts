@@ -66,6 +66,11 @@ export interface MetabotPaths {
     surfProtocolStatePath: string;
     surfSeenPinsPath: string;
     surfSettingsPath: string;
+    longtermRoot: string;
+    longtermTasksPath: string;
+    longtermSubtasksPath: string;
+    longtermEventsPath: string;
+    longtermNudgeStatePath: string;
     llmRoot: string;
     llmRuntimesPath: string;
     llmBindingsPath: string;

@@ -45,6 +45,11 @@ const URI_LOOKING_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** The v1.2.1 spec.validation items (protocol §3, mandatory at/after H_ACT2). */
 const SPEC_VALIDATION_ITEMS = ['null_tolerance', 'enumeration_closure', 'proposition_fidelity'] as const;
 
+/** The declared §4.1 workspace types. A new type belongs here AND needs engine
+ * enforcement: nothing in the engine reads `workspace` today, so a type only
+ * reaches behaviour through this writer's own checks. */
+const SPEC_WORKSPACE_TYPES = ['git', 'metafile', 'inline', 'pin'] as const;
+
 /** Full git commit hash (sha1/sha256 hex) for git-bundle results (draft §4.2). */
 const GIT_COMMIT_RE = /^[0-9a-f]{40}$/i;
 
@@ -128,7 +133,16 @@ export const specWorkspaceRefusal = (workspace: unknown): string | null => {
   }
   const type = asString(workspace.type).trim();
   if (!type) {
-    return 'Refused: spec.workspace.type is required when workspace is declared (draft §4.1: git | metafile | inline | pin).';
+    return `Refused: spec.workspace.type is required when workspace is declared (draft §4.1: ${SPEC_WORKSPACE_TYPES.join(' | ')}).`;
+  }
+  // The value matters, not just its presence. Nothing in the engine reads
+  // `workspace` — only `type === "git"` reaches the submit guard's git-bundle
+  // rule — so a type outside the declared set publishes a contract that nothing
+  // enforces and says so nowhere later. That is exactly the silent dead-letter
+  // this check exists to refuse before any spend (same reasoning as policy.mode,
+  // where an unknown value would replay as something the author never asked for).
+  if (!(SPEC_WORKSPACE_TYPES as readonly string[]).includes(type)) {
+    return `Refused: spec.workspace.type must be one of ${SPEC_WORKSPACE_TYPES.join(' | ')} (draft §4.1) — got "${type}". An undeclared type would publish an artifact contract that no engine check enforces; if the draft adds one, add it to SPEC_WORKSPACE_TYPES together with its enforcement.`;
   }
   const baseRef = workspace.baseRef;
   if (baseRef !== undefined && baseRef !== null) {

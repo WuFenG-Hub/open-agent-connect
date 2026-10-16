@@ -77,6 +77,14 @@ export interface MetabotPaths {
   surfSeenPinsPath: string;
   surfSettingsPath: string;
 
+  // Per-bot long-term task store (`.runtime/longterm/`): first-class tasks,
+  // their sub-tasks, the audit journal, and the advance planner's bookkeeping.
+  longtermRoot: string;
+  longtermTasksPath: string;
+  longtermSubtasksPath: string;
+  longtermEventsPath: string;
+  longtermNudgeStatePath: string;
+
   // LLM runtime / binding paths.
   llmRoot: string;
   llmRuntimesPath: string;
@@ -270,6 +278,13 @@ function buildMetabotPaths(input: {
     surfProtocolStatePath: path.join(input.runtimeRoot, 'surf', 'protocol-state.json'),
     surfSeenPinsPath: path.join(input.runtimeRoot, 'surf', 'seen-pins.json'),
     surfSettingsPath: path.join(input.runtimeRoot, 'surf', 'settings.json'),
+
+    // Per-bot long-term task store (`.runtime/longterm/`).
+    longtermRoot: path.join(input.runtimeRoot, 'longterm'),
+    longtermTasksPath: path.join(input.runtimeRoot, 'longterm', 'tasks.json'),
+    longtermSubtasksPath: path.join(input.runtimeRoot, 'longterm', 'subtasks.json'),
+    longtermEventsPath: path.join(input.runtimeRoot, 'longterm', 'events.json'),
+    longtermNudgeStatePath: path.join(input.runtimeRoot, 'longterm', 'nudge-state.json'),
 
     // LLM paths.
     llmRoot: input.llmRoot,

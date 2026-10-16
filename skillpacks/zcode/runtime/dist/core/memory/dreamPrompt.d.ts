@@ -5,6 +5,10 @@ export declare const DREAM_LOOKBACK_DAYS = 7;
  * abandoning a date after a short burst of transient failures. */
 export declare const DREAM_RETRY_BASE_DELAY_MS: number;
 export declare const DREAM_RETRY_MAX_DELAY_MS: number;
+/** Total scheduled attempts (original + retries) for one dream date before the
+ * automatic retries stop. Without a cap a date that keeps failing is retried
+ * every window forever and nothing surfaces to the owner. */
+export declare const DREAM_RETRY_MAX_ATTEMPTS = 5;
 /** Nightly dream window: [00:00, 06:00) local time. */
 export declare const DREAM_WINDOW_END_MINUTES: number;
 /** Default activity input budget for a day-level prompt, measured in tokens. */
@@ -139,6 +143,9 @@ export type DreamParseResult = {
 export interface DreamRunStateLike {
     status: 'running' | 'completed' | 'failed';
     attemptCount: number;
+    /** Failure message kept on the run; it separates deterministic rejections
+     * from transient failures. Absent on legacy records. */
+    error?: string | null;
     /** Run start (epoch ms). A completed run is final only when it started after
      * the dream date ended — i.e. it reviewed the whole day. */
     startedAt: number;
@@ -162,6 +169,9 @@ export declare function validateSelfIdentity(text?: string | null): {
     charCount: number;
 };
 export declare function computeDreamRetryDelayMs(attemptCount: number): number;
+/** Terminal failures stop the automatic retries for their date; retryable ones
+ * keep the bounded backoff. */
+export declare function classifyDreamError(error: unknown): 'terminal' | 'retryable';
 /**
  * Which past dates still need dream attention for this bot.
  * - Candidates: the last `lookbackDays` calendar days, today excluded, and

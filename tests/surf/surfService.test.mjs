@@ -301,3 +301,60 @@ test('concurrent runs refuse; crash recovery fails stale running rows', async ()
   assert.equal(after.status, 'failed');
   assert.equal(after.failure.code, 'STALE_RUNNING_SWEPT');
 });
+
+test('a truncated session with no verifiable activity does not consume the window', async () => {
+  const paths = await createTempProfileHome('truncated-empty');
+  const { service, store } = makeService(paths, {
+    runSurfSession: async () => ({
+      // The producer declares the cut (step ceiling / watchdog / LLM outage).
+      // The report is non-null either way, so only this flag can tell a
+      // truncated run from a completed one.
+      truncated: 'step_ceiling',
+      stats: {},
+      reportMarkdown: '# Surf report\nno verifiable activity',
+      reportJson: JSON.stringify({ summary: 'no verifiable activity' }),
+      seenActions: [],
+    }),
+  });
+  const run = await service.runSurfAndWait('manual-ui');
+  assert.equal(run.status, 'failed', 'a truncated run with no activity must fail so the window is re-presented');
+  assert.match(run.error, /truncated/);
+  assert.equal(await store.getSeenAction('p-1'), null);
+  assert.equal(await store.getProtocolState('simplebuzz'), null);
+});
+
+test('a truncated session that did real work keeps its receipts', async () => {
+  const paths = await createTempProfileHome('truncated-work');
+  const { service, store } = makeService(paths, {
+    runSurfSession: async () => ({
+      // Receipts, not self-report: the watchdog path flushes what the host
+      // already did, so this run must still settle as done.
+      truncated: 'watchdog_timeout',
+      stats: { deepRead: 2 },
+      reportMarkdown: '# Surf report (partial — watchdog timeout)',
+      reportJson: JSON.stringify({ partial: true, reason: 'watchdog_timeout', deepRead: 2 }),
+      seenActions: [],
+    }),
+  });
+  const run = await service.runSurfAndWait('manual-ui');
+  assert.equal(run.status, 'done');
+  assert.equal(run.stats.deepRead, 2);
+  assert.equal(await store.getSeenAction('p-1'), 'presented');
+});
+
+test('a completed quiet session still consumes the window', async () => {
+  const paths = await createTempProfileHome('quiet');
+  const { service, store } = makeService(paths, {
+    runSurfSession: async () => ({
+      // Completed, and nothing was worth reading today. Failing this would
+      // re-present the same window forever, so it has to stay 'done'.
+      stats: {},
+      reportMarkdown: '# Surf report\nnothing worth reading today',
+      reportJson: JSON.stringify({ summary: 'nothing worth reading today' }),
+      seenActions: [],
+    }),
+  });
+  const run = await service.runSurfAndWait('manual-ui');
+  assert.equal(run.status, 'done');
+  assert.equal(await store.getSeenAction('p-1'), 'presented');
+});

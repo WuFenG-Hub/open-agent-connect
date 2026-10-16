@@ -241,7 +241,11 @@ export function KnowledgeTab({ bot, t }: { bot: { slug: string }; t: Translate }
           showNotice(kb.id, {
             kind: 'error',
             text: [
-              interpolate(t('kbLearnSummary'), summary),
+              interpolate(t('kbLearnSummary'), {
+                added: summary.added,
+                updated: summary.updated,
+                removed: summary.removed,
+              }),
               interpolate(t('kbLearnFailedFiles'), { count: failedTotal }),
               ...lines,
               ...(failedTotal > lines.length ? [interpolate(t('kbLearnFailedMore'), { count: failedTotal - lines.length })] : []),
@@ -249,7 +253,11 @@ export function KnowledgeTab({ bot, t }: { bot: { slug: string }; t: Translate }
           })
           return
         }
-        showNotice(kb.id, { kind: 'success', text: interpolate(t('kbLearnSummary'), summary) })
+        showNotice(kb.id, { kind: 'success', text: interpolate(t('kbLearnSummary'), {
+          added: summary.added,
+          updated: summary.updated,
+          removed: summary.removed,
+        }) })
       })
       .catch((cause) => showNotice(kb.id, { kind: 'error', text: errorText(cause) || t('kbLearnFailed') }))
       .finally(() => {

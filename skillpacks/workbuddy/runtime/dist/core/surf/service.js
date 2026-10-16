@@ -244,6 +244,16 @@ class SurfService {
                 reportMarkdown = session.reportMarkdown ?? null;
                 reportJson = session.reportJson ?? null;
                 sessionSeenActions.push(...(session.seenActions ?? []));
+                // A run the producer cut short (step ceiling, watchdog timeout, LLM
+                // outage) that ALSO produced no verifiable activity must not consume the
+                // window: the ledger writes below are what stop these pins from ever
+                // being presented again, so it fails here like any other failure and the
+                // next surf re-presents the same window. A truncated run that did work
+                // keeps its receipts, and a completed run that happened to do nothing is
+                // a legitimate quiet surf — both still settle as 'done'.
+                if (session.truncated && !(0, store_js_1.surfSessionDidSomething)(stats)) {
+                    throw new Error(`surf session was truncated (${session.truncated}) with no verifiable activity`);
+                }
             }
             // Seen-ledger writes land ONLY on this success path: every briefed pin
             // becomes 'presented' and the session's self-reported actions fold on
@@ -294,7 +304,9 @@ class SurfService {
             await this.store.finishRun(runId, {
                 status: 'done',
                 stats,
-                reportMarkdown: reportMarkdown ? `${reportMarkdown}\n\n---\n\n${digest}` : digest,
+                // Composed rather than concatenated here: the report is capped on its
+                // own budget first, so the digest is never what the cap cuts.
+                reportMarkdown: (0, store_js_1.composeSurfReportMarkdown)(reportMarkdown, digest),
                 reportJson,
                 finishedAtIso: nowIso,
             });

@@ -14,6 +14,8 @@ const {
   createMetawebSurfStore,
   SEEN_ACTION_RANK,
   SURF_SEEN_MAX_ROWS_PER_BOT,
+  MAX_REPORT_MARKDOWN_CHARS,
+  composeSurfReportMarkdown,
 } = require('../../dist/core/surf/store.js');
 const { createSurfSettingsStore } = require('../../dist/core/surf/settings.js');
 
@@ -184,4 +186,49 @@ test('seen action ranks order chain-write classes above read/save', () => {
   assert.ok(SEEN_ACTION_RANK.commented < SEEN_ACTION_RANK.answered);
   assert.ok(SEEN_ACTION_RANK.answered < SEEN_ACTION_RANK.posted);
   assert.ok(SEEN_ACTION_RANK.posted < SEEN_ACTION_RANK.challenged);
+});
+
+test('the briefing digest is never the thing the report cap cuts', () => {
+  assert.ok(
+    Number.isInteger(MAX_REPORT_MARKDOWN_CHARS) && MAX_REPORT_MARKDOWN_CHARS > 0,
+    'the report cap must be exported so callers can compose against it',
+  );
+
+  const digest = '## Briefing\n\n- inbox: pin item that must survive\n';
+  assert.equal(composeSurfReportMarkdown(null, digest), digest, 'no report → the digest is stored alone');
+
+  // A report sitting exactly at its cap plus the digest: the report is capped
+  // first, so the digest is never the tail that silently gets cut.
+  const composed = composeSurfReportMarkdown('R'.repeat(MAX_REPORT_MARKDOWN_CHARS), digest);
+  assert.ok(composed.endsWith(digest), 'the digest stays intact at the end of the stored document');
+  assert.ok(
+    composed.length > MAX_REPORT_MARKDOWN_CHARS,
+    'the digest rides outside the report budget',
+  );
+});
+
+test('a finished run keeps the digest that rides in the report column', async () => {
+  const paths = await createTempProfileHome('digest');
+  const store = createMetawebSurfStore(paths);
+  await store.createRun({ id: 'run-digest', trigger: 'manual-ui', nowIso: '2026-09-15T10:00:00.000Z' });
+
+  const digest = '## Briefing\n\n- radar: pin item that must survive\n';
+  // The documented report cap, spelled out so this case is meaningful on its
+  // own (it must fail while the cap still applies to the composed document).
+  const REPORT_CAP = 20_000;
+  // The exact shape the surf service composes: the report at its cap, then the
+  // digest appended after the separator.
+  const composed = `${'R'.repeat(REPORT_CAP)}\n\n---\n\n${digest}`;
+  await store.finishRun('run-digest', {
+    status: 'done',
+    stats: {},
+    reportMarkdown: composed,
+    finishedAtIso: '2026-09-15T10:05:00.000Z',
+  });
+
+  const stored = await store.getRun('run-digest');
+  assert.ok(
+    stored.reportMarkdown.includes(digest),
+    'the stored report must still carry the digest after the report cap applied',
+  );
 });

@@ -6363,6 +6363,90 @@ return {
         input as Record<string, unknown>,
       ),
     },
+    longtask: {
+      // Local and file-backed: the store is built from the resolved profile home
+      // through the central registry keys, with no daemon round trip.
+      list: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        return commandSuccess({ tasks: await store.listTasks() });
+      },
+      board: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        return commandSuccess({ cards: await store.getBoard() });
+      },
+      create: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        try {
+          return commandSuccess(await store.createTask({
+            id: input.id, title: input.title, goal: input.goal ?? '', stage: 'active',
+            nowIso: new Date().toISOString(),
+          }));
+        } catch (error) {
+          return commandFailed('longtask_create_failed', error instanceof Error ? error.message : String(error));
+        }
+      },
+      show: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        const task = await store.getTask(input.id);
+        if (!task) return commandFailed('longtask_not_found', `No long-term task ${input.id}.`);
+        const [subtasks, events] = await Promise.all([
+          store.listSubtasks(input.id),
+          store.listEvents(input.id),
+        ]);
+        return commandSuccess({ task, subtasks, events });
+      },
+      advance: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const { runAdvance } = await import('../core/longtask/service.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        try {
+          return commandSuccess(await runAdvance(store, Date.now()));
+        } catch (error) {
+          return commandFailed('longtask_advance_failed', error instanceof Error ? error.message : String(error));
+        }
+      },
+      addSubtask: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        try {
+          return commandSuccess(await store.addSubtask({
+            taskId: input.id, id: input.subtaskId, ordinal: input.ordinal,
+            title: input.title, dependsOn: input.dependsOn,
+          }));
+        } catch (error) {
+          return commandFailed('longtask_subtask_failed', error instanceof Error ? error.message : String(error));
+        }
+      },
+      setSubtaskStatus: async (input) => {
+        const actor = await resolveActorHomeDir(context, input.from);
+        if (!('homeDir' in actor)) return actor;
+        const { createLongTermStore, longTermStorePaths } = await import('../core/longtask/store.js');
+        const store = createLongTermStore(longTermStorePaths(resolveMetabotPaths(actor.homeDir)));
+        const subtask = await store.updateSubtaskStatus(
+          input.id, input.subtaskId,
+          input.status as Parameters<typeof store.updateSubtaskStatus>[2],
+          new Date().toISOString(),
+        );
+        if (!subtask) return commandFailed('longtask_subtask_not_found', `No sub-task ${input.subtaskId} in ${input.id}.`);
+        return commandSuccess(subtask);
+      },
+    },
     surf: {
       status: async (input) => {
         const actor = await resolveActorHomeDir(context, input.from);
@@ -6667,6 +6751,7 @@ export function mergeCliDependencies(context: CliRuntimeContext): CliDependencie
     dream: { ...defaults.dream, ...provided.dream },
     knowledgeBase: { ...defaults.knowledgeBase, ...provided.knowledgeBase },
     schedule: { ...defaults.schedule, ...provided.schedule },
+    longtask: { ...defaults.longtask, ...provided.longtask },
     surf: { ...defaults.surf, ...provided.surf },
     twin: { ...defaults.twin, ...provided.twin },
     file: { ...defaults.file, ...provided.file },
@@ -7230,6 +7315,14 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         memoryEnabled,
       });
       const report = parseSurfRunReport(finalText);
+      // The turn synthesises a report when it hits the tool-step ceiling without
+      // ever emitting a final one, and that report is non-null exactly like a
+      // real report. This is the only place that knows the turn's own output
+      // shape, so the run is marked truncated here; a truncated run that also
+      // produced no verifiable activity must not consume the seen ledger (see
+      // the guard in core/surf/service.ts).
+      const { SURF_STEP_CEILING_SUMMARY } = await import('../core/surf/turn.js');
+      const truncated = report.summary === SURF_STEP_CEILING_SUMMARY ? 'step_ceiling' : null;
       // Receipts over self-report: chain-write classes and scheduled tasks
       // come only from what the host actually published.
       const receipts = surfReceiptSeenActions(writeState);
@@ -7249,6 +7342,7 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         reportMarkdown: report.reportMarkdown,
         reportJson: report.reportJson,
         seenActions: foldSurfReceiptsIntoSeenActions(report.seenActions, writeState),
+        truncated,
       };
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

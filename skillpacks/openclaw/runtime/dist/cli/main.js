@@ -36,6 +36,7 @@ const memory_1 = require("./commands/memory");
 const chainhistory_1 = require("./commands/chainhistory");
 const dream_1 = require("./commands/dream");
 const surf_1 = require("./commands/surf");
+const longtask_1 = require("./commands/longtask");
 const knowledge_base_1 = require("./commands/knowledge-base");
 const schedule_1 = require("./commands/schedule");
 const twin_1 = require("./commands/twin");
@@ -178,6 +179,9 @@ async function runCli(argv, cliContext = {}) {
                     break;
                 case 'surf':
                     result = await (0, surf_1.runSurfCommand)(rest, context);
+                    break;
+                case 'longtask':
+                    result = await (0, longtask_1.runLongTaskCommand)(rest, context);
                     break;
                 case 'knowledge-base':
                     result = await (0, knowledge_base_1.runKnowledgeBaseCommand)(rest, context);
