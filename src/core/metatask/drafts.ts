@@ -29,15 +29,21 @@ export interface ParticipateDraft {
 }
 
 /**
- * Suggested first node: among open nodes prefer entry nodes (deps: []) with
- * the fewest competing candidates, then the fewest deps, then id order; when
- * nothing is open the draft carries no hint.
+ * Suggested first node: among the nodes a participant can actually join, prefer
+ * entry nodes (deps: []) with the fewest competing candidates, then the fewest
+ * deps, then id order; when nothing is joinable the draft carries no hint.
+ *
+ * Joinable is MODE-AWARE. Tree mode takes only `open` nodes: a `claimed` one is
+ * locked by someone else and the claim guard refuses it (writer.ts), so
+ * suggesting it would hand the human a command that cannot succeed. Competitive
+ * mode has no node lock, so any non-verified node qualifies.
  */
 export const suggestParticipateNode = (
   projection: MetaTaskTaskProjection
 ): string | null => {
-  const open = Object.values(projection.nodeStates ?? {}).filter(
-    (node) => node.status !== 'verified'
+  const competitive = projection.policy?.mode === 'competitive';
+  const open = Object.values(projection.nodeStates ?? {}).filter((node) =>
+    competitive ? node.status !== 'verified' : node.status === 'open'
   );
   if (open.length === 0) return null;
   const contenders = open.filter((node) => (node.deps ?? []).length === 0);

@@ -85,3 +85,74 @@ test('drafts: node suggestion prefers open entry nodes with the fewest candidate
   }));
   assert.equal(settled, null);
 });
+
+/**
+ * Suggested-node eligibility is MODE-AWARE. In tree mode a `claimed` node is
+ * locked by someone else and the claim guard (writer.ts) refuses it, so it must
+ * never be suggested. Competitive mode has no node lock, so any non-verified
+ * node is a legitimate candidate.
+ */
+const treeOf = (nodeStates) => ({
+  rootPinId: 'task000000000000000000000000000000000000000000000000000002i0',
+  title: 'tree task',
+  policy: { mode: 'tree' },
+  nodeStates,
+});
+const competitiveOf = (nodeStates) => ({
+  rootPinId: 'task000000000000000000000000000000000000000000000000000003i0',
+  title: 'competitive task',
+  policy: { mode: 'competitive' },
+  nodeStates,
+});
+
+test('drafts: tree mode never suggests a claimed node (the claim guard would refuse it)', () => {
+  const draft = buildParticipateDraft(
+    treeOf({ r1: { id: 'r1', status: 'claimed', deps: [], submissions: [] } }),
+    { lang: 'en' },
+  );
+  assert.equal(draft.node, null, 'a claimed node is not claimable in tree mode');
+  assert.doesNotMatch(draft.text, /good candidate/, 'no node hint when nothing is open');
+});
+
+test('drafts: tree mode prefers an open node over a claimed one with fewer contenders', () => {
+  const draft = buildParticipateDraft(
+    treeOf({
+      r1: { id: 'r1', status: 'claimed', deps: [], submissions: [] },
+      r2: { id: 'r2', status: 'open', deps: [], submissions: [{}, {}, {}] },
+    }),
+    { lang: 'en' },
+  );
+  assert.equal(draft.node, 'r2', 'eligibility beats the contender ranking');
+});
+
+test('drafts: competitive mode still suggests a claimed node (no node lock there)', () => {
+  const draft = buildParticipateDraft(
+    competitiveOf({ r1: { id: 'r1', status: 'claimed', deps: [], submissions: [] } }),
+    { lang: 'en' },
+  );
+  assert.equal(draft.node, 'r1', 'competitive mode has no lock, so claimed nodes stay eligible');
+});
+
+test('drafts: competitive mode does not suggest a verified node', () => {
+  const draft = buildParticipateDraft(
+    competitiveOf({
+      r1: { id: 'r1', status: 'verified', deps: [], submissions: [] },
+      r2: { id: 'r2', status: 'claimed', deps: [], submissions: [] },
+    }),
+    { lang: 'en' },
+  );
+  assert.equal(draft.node, 'r2');
+});
+
+test('drafts: nothing eligible leaves the hint out', () => {
+  const tree = buildParticipateDraft(
+    treeOf({ r1: { id: 'r1', status: 'verified', deps: [], submissions: [] } }),
+    { lang: 'en' },
+  );
+  assert.equal(tree.node, null);
+  const competitive = buildParticipateDraft(
+    competitiveOf({ r1: { id: 'r1', status: 'verified', deps: [], submissions: [] } }),
+    { lang: 'en' },
+  );
+  assert.equal(competitive.node, null);
+});
