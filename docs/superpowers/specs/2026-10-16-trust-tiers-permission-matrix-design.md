@@ -14,7 +14,17 @@ store (`trust-local.json`), contact evidence from private-chat state,
 `metabot trust` + `metabot block` CLIs with `/api/trust/*` + `/api/block/*`
 daemon routes, and a generalized non-profile identity pin publisher
 (`identityChainPublisher.ts`).
-Not yet landed: P3 tier resolver, P4 enforcement, P5 final CLI naming.
+**(updated 2026-10-16): P3 landed** — pure decision layer: peer tier
+resolver (`peerTrustResolver.ts`, spec precedence + short-TTL tier cache,
+block/contacts fresh-read, invalidation wired into the trust/block daemon
+handlers), capability classes + exact permission matrix
+(`capabilityClasses.ts`), built-in skill→class registry
+(`src/core/services/skillCapabilityClasses.ts`, unknown → C3), and the
+policy engine (`trustPolicy.ts`: `evaluatePeerPolicy` with per-context
+accept defaults + `trust.skillClassOverrides` / `trust.chatTrustPolicy`
+per-profile config plumbed through `metabot config get/set`).
+Not yet landed: P4 enforcement (chat ingress, invite acceptance,
+group-task seating), P5 final CLI naming.
 
 ## Goal
 
@@ -299,7 +309,14 @@ pending ). Slow files are added to `INTEGRATION_FILES` in
    surface; naming revision stays open.)
 3. Whether `contact` C2 scope (group-task context only) needs an explicit
    sandbox-path allow-list in the executor, or the existing work-dir
-   convention is sufficient — resolved in P3.
+   convention is sufficient — **P3 decision (convention, documented)**: the
+   C2 sandbox boundary is enforced by the existing work-dir convention
+   (skills operate inside `<profile>/.runtime/` work dirs; C2 is defined as
+   sandbox writes + on-chain publishes), NOT by executor path-jailing. The
+   policy engine exposes `context: 'grouptask'` vs `'chat'` precisely so
+   `contact` receives C2 skills only in group-task context; a path-jailing
+   executor is deferred until a real escape is observed — the skill
+   capability registry gives a single place to tighten classes if one is.
 4. Trust-cache staleness policy (P1): a cache hit inside a 5-minute TTL is
    served without any chain read; misses/expires re-walk and store the new
    pinIds; `invalidate(subject)` drops entries event-driven. Whether P4

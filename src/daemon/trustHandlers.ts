@@ -40,6 +40,9 @@ export interface TrustDaemonHandlersInput {
   requestSubsidy?: (options: RequestMvcGasSubsidyOptions) => Promise<RequestMvcGasSubsidyResult>;
   /** Test seam: full override of the trusted-owner resolver. */
   trustedOwnerResolver?: TrustedOwnerResolver;
+  /** Called after a successful grant/revoke so consumers (e.g. the P3 peer
+   *  tier resolver's short-TTL cache) can drop stale tier entries. */
+  onTrustConfigChanged?: () => void;
 }
 
 function trustFailure(error: unknown, fallbackCode: string): MetabotCommandResult<never> {
@@ -131,6 +134,7 @@ export function createTrustDaemonHandlers(
         });
         // The owner's own grants changed — drop the stale cache entry.
         await resolver.invalidate(rootOwner.globalMetaId);
+        input.onTrustConfigChanged?.();
         return commandSuccess({
           trustGrant: {
             owner: rootOwner.globalMetaId,
@@ -192,6 +196,7 @@ export function createTrustDaemonHandlers(
           chainWrites.push(result.chainWrite);
         }
         await resolver.invalidate(rootOwner.globalMetaId);
+        input.onTrustConfigChanged?.();
         return commandSuccess({
           revoked: revokePinIds,
           owner: rootOwner.globalMetaId,

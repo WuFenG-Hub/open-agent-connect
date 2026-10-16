@@ -22,6 +22,9 @@ import type { MetabotDaemonHttpHandlers } from './routes/types';
 export interface BlockDaemonHandlersInput {
   /** The machine-wide system home that owns `~/.metabot/owner/`. */
   systemHomeDir: string;
+  /** Called after a successful add/remove so consumers (e.g. the P3 peer
+   *  tier resolver's short-TTL cache) can drop stale tier entries. */
+  onTrustConfigChanged?: () => void;
 }
 
 function normalizeText(value: unknown): string {
@@ -45,6 +48,7 @@ export function createBlockDaemonHandlers(
       }
       try {
         const state = await blockGmid(systemHomeDir, globalMetaId);
+        input.onTrustConfigChanged?.();
         return commandSuccess({ blocked: state.blocked, added: globalMetaId });
       } catch (error) {
         return commandFailed('block_add_failed', error instanceof Error ? error.message : String(error));
@@ -58,6 +62,7 @@ export function createBlockDaemonHandlers(
       }
       try {
         const state = await unblockGmid(systemHomeDir, globalMetaId);
+        input.onTrustConfigChanged?.();
         return commandSuccess({ blocked: state.blocked, removed: globalMetaId });
       } catch (error) {
         return commandFailed('block_remove_failed', error instanceof Error ? error.message : String(error));

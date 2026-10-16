@@ -224,6 +224,7 @@ import { createUserDaemonHandlers } from './userHandlers';
 import { createOwnerDaemonHandlers } from './ownerHandlers';
 import { createTrustDaemonHandlers } from './trustHandlers';
 import { createBlockDaemonHandlers } from './blockHandlers';
+import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -5650,6 +5651,14 @@ export function createDefaultMetabotDaemonHandlers(input: {
     ?? ((globalMetaId: string) => fetchPeerChatPublicKey(globalMetaId, {
       chainApiBaseUrl: input.chainApiBaseUrl,
     }));
+  // Shared peer trust-tier resolver (trust tiers P3): the pure decision
+  // layer's tier cache is dropped whenever grants/blocks change (see the
+  // trust/block handler groups below), so tier evaluations never serve stale
+  // trust configuration. P4 wires the resolver itself into the chat/invite
+  // enforcement points.
+  const peerTrustTierResolver = createPeerTrustResolver({
+    systemHomeDir: normalizedSystemHomeDir,
+  });
   const callerReplyWaiter = input.callerReplyWaiter ?? createSocketIoMetaWebReplyWaiter({
     resolveSocketEndpoints: async () => [(await resolveInfrastructure()).socket],
   });
@@ -15053,9 +15062,11 @@ export function createDefaultMetabotDaemonHandlers(input: {
       systemHomeDir: normalizedSystemHomeDir,
       adapters,
       resolveSponsorWritePin,
+      onTrustConfigChanged: () => peerTrustTierResolver.invalidate(),
     }),
     block: createBlockDaemonHandlers({
       systemHomeDir: normalizedSystemHomeDir,
+      onTrustConfigChanged: () => peerTrustTierResolver.invalidate(),
     }),
     network: {
       listServices: async ({ online, query, cached }) => {

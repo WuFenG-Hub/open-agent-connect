@@ -45,6 +45,10 @@ const DEFAULT_CONFIG = {
     chainHistorySummaryEnabled: true,
   },
   browser: DEFAULT_BROWSER_CONFIG,
+  trust: {
+    skillClassOverrides: {},
+    chatTrustPolicy: {},
+  },
 };
 
 async function withTempProfileHome(action) {
@@ -130,6 +134,10 @@ test('createConfigStore defaults to the active runtime config and persists updat
         defaultChainName: 'opcat',
         localMode: false,
       },
+      trust: {
+        skillClassOverrides: {},
+        chatTrustPolicy: {},
+      },
     };
 
     await store.set(updated);
@@ -191,6 +199,10 @@ test('read ignores retired askMaster and evolution_network config fields', async
         chainHistorySummaryEnabled: true,
       },
       browser: DEFAULT_BROWSER_CONFIG,
+      trust: {
+        skillClassOverrides: {},
+        chatTrustPolicy: {},
+      },
     });
   });
 });
@@ -256,6 +268,10 @@ test('set drops retired askMaster and evolution_network fields from persisted co
         chainHistorySummaryEnabled: true,
       },
       browser: DEFAULT_BROWSER_CONFIG,
+      trust: {
+        skillClassOverrides: {},
+        chatTrustPolicy: {},
+      },
     });
   });
 });

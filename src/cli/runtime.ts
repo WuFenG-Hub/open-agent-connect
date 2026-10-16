@@ -25,6 +25,14 @@ import {
   DEFAULT_WRITE_NETWORKS,
   type DefaultWriteNetwork,
 } from '../core/config/configTypes';
+import {
+  normalizeSkillClassOverrides,
+  type SkillCapabilityClass,
+} from '../core/services/skillCapabilityClasses';
+import {
+  normalizeChatTrustPolicy,
+  type ChatTrustPolicyConfig,
+} from '../core/trust/trustPolicy';
 import { bindHostSkills, bindPlatformSkills, HostSkillBindingError } from '../core/host/hostSkillBinding';
 import {
   bindHostPersonaProjection,
@@ -593,9 +601,11 @@ type SupportedBooleanConfigKey =
 
 type SupportedEnumConfigKey = 'chain.defaultWriteNetwork';
 
-type SupportedConfigKey = SupportedBooleanConfigKey | SupportedEnumConfigKey;
+type SupportedObjectConfigKey = 'trust.skillClassOverrides' | 'trust.chatTrustPolicy';
 
-type SupportedConfigValue = boolean | DefaultWriteNetwork;
+type SupportedConfigKey = SupportedBooleanConfigKey | SupportedEnumConfigKey | SupportedObjectConfigKey;
+
+type SupportedConfigValue = boolean | DefaultWriteNetwork | Record<string, SkillCapabilityClass> | ChatTrustPolicyConfig;
 
 const SUPPORTED_CONFIG_KEYS = new Set<SupportedConfigKey>([
   'a2a.simplemsgListenerEnabled',
@@ -603,6 +613,8 @@ const SUPPORTED_CONFIG_KEYS = new Set<SupportedConfigKey>([
   'chain.mvcSponsorUploadEnabled',
   'automation.dreamTickEnabled',
   'automation.chainHistorySummaryEnabled',
+  'trust.skillClassOverrides',
+  'trust.chatTrustPolicy',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -620,7 +632,7 @@ function isSupportedBooleanConfigKey(key: SupportedConfigKey): key is SupportedB
     || key === 'automation.chainHistorySummaryEnabled';
 }
 
-function readConfigValue(
+export function readConfigValue(
   config: Awaited<ReturnType<ConfigStore['read']>>,
   key: SupportedConfigKey,
 ): SupportedConfigValue {
@@ -636,14 +648,38 @@ function readConfigValue(
   if (key === 'automation.dreamTickEnabled') {
     return config.automation.dreamTickEnabled;
   }
+  if (key === 'trust.skillClassOverrides') {
+    return config.trust.skillClassOverrides;
+  }
+  if (key === 'trust.chatTrustPolicy') {
+    return config.trust.chatTrustPolicy;
+  }
   return config.automation.chainHistorySummaryEnabled;
 }
 
-function writeConfigValue(
+export function writeConfigValue(
   config: Awaited<ReturnType<ConfigStore['read']>>,
   key: SupportedConfigKey,
   value: SupportedConfigValue,
 ): Awaited<ReturnType<ConfigStore['read']>> {
+  if (key === 'trust.skillClassOverrides') {
+    return {
+      ...config,
+      trust: {
+        ...config.trust,
+        skillClassOverrides: normalizeSkillClassOverrides(value),
+      },
+    };
+  }
+  if (key === 'trust.chatTrustPolicy') {
+    return {
+      ...config,
+      trust: {
+        ...config.trust,
+        chatTrustPolicy: normalizeChatTrustPolicy(value),
+      },
+    };
+  }
   if (key === 'chain.defaultWriteNetwork') {
     return {
       ...config,
@@ -692,9 +728,9 @@ function writeConfigValue(
   return config;
 }
 
-function normalizeConfigValueForKey(input: {
+export function normalizeConfigValueForKey(input: {
   key: SupportedConfigKey;
-  value: boolean | string;
+  value: boolean | string | Record<string, unknown>;
 }): {
   ok: true;
   value: SupportedConfigValue;
@@ -702,6 +738,22 @@ function normalizeConfigValueForKey(input: {
   ok: false;
   message: string;
 } {
+  if (input.key === 'trust.skillClassOverrides' || input.key === 'trust.chatTrustPolicy') {
+    // Object-valued keys arrive as JSON strings from `metabot config set`.
+    let parsed: unknown = input.value;
+    if (typeof input.value === 'string') {
+      try {
+        parsed = JSON.parse(input.value);
+      } catch {
+        return { ok: false, message: `Config key ${input.key} requires a JSON object value.` };
+      }
+    }
+    if (input.key === 'trust.skillClassOverrides') {
+      return { ok: true, value: normalizeSkillClassOverrides(parsed) };
+    }
+    return { ok: true, value: normalizeChatTrustPolicy(parsed) };
+  }
+
   if (isSupportedBooleanConfigKey(input.key)) {
     if (typeof input.value !== 'boolean') {
       return {

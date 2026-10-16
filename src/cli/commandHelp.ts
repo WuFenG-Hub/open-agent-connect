@@ -916,7 +916,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
   },
   {
     commandPath: ['config', 'set'],
-    summary: 'Persist one supported public config key.',
+    summary: 'Persist one supported public config key. The trust.* keys take a JSON object (per-profile trust-tier overrides).',
     usage: 'metabot config set [--from <bot-slug>] <key> <value>',
     successFields: [
       'key',
@@ -926,11 +926,14 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
       'Fails with missing_argument when the key or value is omitted.',
       'Fails with unsupported_config_key when the requested key is not in the public CLI allowlist.',
       'Fails when chain.defaultWriteNetwork is not one of mvc, btc, doge, or opcat.',
+      'Fails when a trust.* key value is not a JSON object; invalid skill classes and unknown tiers/behaviors are dropped on normalize.',
     ],
     examples: [
       'metabot config set --from alice chain.defaultWriteNetwork opcat',
       'metabot config set --from alice a2a.simplemsgListenerEnabled false',
       'metabot config set --from alice automation.chainHistorySummaryEnabled false',
+      'metabot config set --from alice trust.skillClassOverrides \'{"metabot-memory":"C1"}\'',
+      'metabot config set --from alice trust.chatTrustPolicy \'{"chat":{"stranger":"queue"}}\'',
     ],
     optionalFlags: [FROM_BOT_FLAG, HELP_JSON_FLAG],
   },
