@@ -25,7 +25,15 @@ export interface PrivateChatAllowedSkillScope {
   warning: string | null;
 }
 
-export type PrivateChatAllowedSkillsResolver = () => Promise<PrivateChatAllowedSkillScope>;
+export type PrivateChatAllowedSkillsResolver = (
+  /**
+   * Optional trust-tier policy filter (trust tiers P4a): when provided, the
+   * resolved scope is intersected with this list — the policy already applied
+   * the tier's capability-class ceiling to the profile's allowChatSkills, and
+   * this resolver keeps only the installed-and-validated remainder.
+   */
+  policyAllowedSkills?: string[] | null,
+) => Promise<PrivateChatAllowedSkillScope>;
 
 export function emptyPrivateChatAllowedSkillScope(): PrivateChatAllowedSkillScope {
   return {
@@ -67,7 +75,7 @@ export function createPrivateChatAllowedSkillsResolver(input: {
     },
   ).catch(() => undefined);
 
-  return async () => {
+  return async (policyAllowedSkills?: string[] | null) => {
     const profile = await getMetabotProfile(input.paths.systemHomeDir, input.metaBotSlug);
     if (!profile || profile.allowChatSkills.length === 0) {
       const emptyScope = emptyPrivateChatAllowedSkillScope();
@@ -92,7 +100,7 @@ export function createPrivateChatAllowedSkillsResolver(input: {
       input.logWarning?.('[private chat allowed skills]', result.warning);
     }
 
-    const scope = {
+    let scope = {
       skills: result.skills.map((skill) => skill.skillName),
       skillSourcePaths: result.skillSourcePaths,
       skillDetails: result.skills.map((skill) => ({
@@ -107,6 +115,23 @@ export function createPrivateChatAllowedSkillsResolver(input: {
       skippedSkills: result.skippedSkills,
       warning: result.warning ?? null,
     };
+
+    // Trust-tier policy (P4a): keep only the skills this peer's tier allows.
+    // An empty filter list means "plain chat, no skill execution" (e.g. a
+    // stranger) — NOT "no filtering"; absence of the argument is the legacy
+    // unfiltered path.
+    if (policyAllowedSkills) {
+      const allowed = new Set(policyAllowedSkills);
+      const skills = scope.skills.filter((skillName) => allowed.has(skillName));
+      scope = {
+        ...scope,
+        skills,
+        skillSourcePaths: Object.fromEntries(
+          Object.entries(scope.skillSourcePaths).filter(([skillName]) => allowed.has(skillName)),
+        ),
+        skillDetails: scope.skillDetails.filter((detail) => allowed.has(detail.name)),
+      };
+    }
     await persistResolution(scope);
     return scope;
   };

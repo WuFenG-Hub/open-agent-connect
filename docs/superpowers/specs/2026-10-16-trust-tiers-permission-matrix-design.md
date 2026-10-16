@@ -25,6 +25,22 @@ accept defaults + `trust.skillClassOverrides` / `trust.chatTrustPolicy`
 per-profile config plumbed through `metabot config get/set`).
 Not yet landed: P4 enforcement (chat ingress, invite acceptance,
 group-task seating), P5 final CLI naming.
+**(updated 2026-10-16): P4a landed** — private-chat ingress enforcement:
+`handleInboundMessage` consults `evaluatePeerPolicy` (context `chat`) before
+the auto-reply turn for `private_chat` messages; `auto` replies with the
+tier-filtered skill set threaded through the existing allowed-skills resolver
+(no runner-safeguard bypass); `queue` pauses the conversation and surfaces the
+message via the existing pending-guidance mechanism (a human-guided turn
+consumes it — no new queue UI); `ignore`/`decline` persist record-only with
+no turn and no wake; wake turns and backfill retries re-drive PEER messages
+and consult the same policy (non-auto drops the re-drive); evaluator failures
+fail safe as stranger-with-no-skills (`trust_policy_failed` log event).
+**Grok relay decision:** the Grok-webhook relay path
+(`recordExternallyRelayedInbound`) is unchanged — relayed profiles delegate
+judgment to the bound assistant (its own model decides), and the tier policy
+gates the local auto-reply path only.
+Not yet landed: P4b (OpenTeam invite acceptance), P4c (group-task team
+seating), P5 final CLI naming.
 
 ## Goal
 
@@ -216,6 +232,13 @@ stranger ≈ friendly chat only; blocked = silence.
    configurable per profile; defaults follow the matrix.
    **Behavior change: strangers no longer get `allowChatSkills` execution by
    default (today they do).**
+   **Status: implemented (P4a, 2026-10-16).** The gate runs before the
+   auto-reply turn; the filtered skill set is threaded through the existing
+   allowed-skills resolver (runner safeguards untouched); `queue` reuses the
+   pending-guidance mechanism on a paused conversation; wake turns and
+   backfill retries re-drive peer messages under the same policy; evaluator
+   failures fail safe as stranger-with-no-skills. The Grok-webhook relay path
+   is deliberately excluded (delegates judgment to the bound assistant).
 2. **OpenTeam invite acceptance** (`grouptask/engine.handleGuestInvite`):
    after the existing validation, gate on tier — `team`/`trusted`/`contact`
    auto-accept; `stranger` is recorded as a **pending invite** (no join) and

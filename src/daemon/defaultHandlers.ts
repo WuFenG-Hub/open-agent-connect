@@ -225,6 +225,7 @@ import { createOwnerDaemonHandlers } from './ownerHandlers';
 import { createTrustDaemonHandlers } from './trustHandlers';
 import { createBlockDaemonHandlers } from './blockHandlers';
 import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
+import { evaluatePeerPolicy } from '../core/trust/trustPolicy';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -7173,6 +7174,28 @@ export function createDefaultMetabotDaemonHandlers(input: {
         runtimeStateStore: profileRuntimeStateStore,
         sessionStateStore: profileSessionStateStore,
       }),
+      // Trust-tier policy at private-chat ingress (P4a): tier + accept
+      // behavior + class-filtered skill set, resolved per sender before the
+      // auto-reply turn. The orchestrator fails safe on errors. The Grok
+      // webhook relay path never reaches this — relayed profiles delegate
+      // judgment to the bound assistant (see the runtime dispatcher).
+      evaluatePeerTrustPolicy: async (senderGlobalMetaId) => {
+        const profileRecord = await getMetabotProfile(normalizedSystemHomeDir, profileMetaBotSlug)
+          .catch(() => null);
+        const profileConfig = await createConfigStore(profileHomeDir).read().catch(() => null);
+        return evaluatePeerPolicy({
+          peerGlobalMetaId: senderGlobalMetaId,
+          profile: {
+            allowChatSkills: profileRecord?.allowChatSkills,
+            skillClassOverrides: profileConfig?.trust.skillClassOverrides,
+            chatTrustPolicy: profileConfig?.trust.chatTrustPolicy,
+          },
+          profileHomeDir: profileHomeDir,
+          context: 'chat',
+          systemHomeDir: normalizedSystemHomeDir,
+          tierResolver: peerTrustTierResolver,
+        });
+      },
     }, profileAutoReplyConfig);
 
     // Accept-and-poll: a guided turn can take minutes (LLM + possible skill

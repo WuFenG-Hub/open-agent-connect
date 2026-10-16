@@ -2534,6 +2534,11 @@ export function createPrivateChatAutoReplyProfileDispatcher(
     async handleInboundMessage(profile, message) {
       const orchestrator = await getOrCreateOrchestrator(profile);
       if (!orchestrator) return;
+      // Trust tiers P4a: the tier policy (evaluatePeerTrustPolicy) gates the
+      // LOCAL auto-reply path only. The Grok-webhook relay below delegates
+      // judgment to the bound assistant — its own model decides how to answer
+      // — so relayed profiles never run the local policy gate; tier policy
+      // for relayed assistants is the host platform's concern.
       if (!input.handleOrderProtocolMessageForProfile) {
         const genericMessage = normalizeDispatcherPrivateChatMessage(message);
         if (classifySimplemsgContent(message.content).kind !== 'order_protocol') {
