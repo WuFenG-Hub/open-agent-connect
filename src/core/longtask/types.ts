@@ -51,3 +51,26 @@ export interface LongTermTaskProgress {
   total: number;
   percent: number;
 }
+
+/** A long-term task: a first-class entity with its own lifecycle. */
+export interface LongTermTask {
+  id: string;
+  title: string;
+  goal: string;
+  stage: LongTermTaskStage;
+  /** Explicit board pin, honoured only while that sub-task is still open. */
+  currentSubtaskId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Append-only audit line for a task (status moves, escalations, owner nudges). */
+export interface LongTermEvent {
+  id: string;
+  taskId: string;
+  subtaskId: string | null;
+  kind: string;
+  actor: string;
+  detail: string | null;
+  at: string;
+}
