@@ -527,7 +527,14 @@ export function createMemoryStore(paths: MetabotPaths): MemoryStore {
           // The LLM call had an await window: anything edited or injection-
           // touched (lastUsedAt/updatedAt bumped) since the inventory snapshot
           // must survive the proposal.
-          if (input.notUsedSince != null && (entry.lastUsedAt ?? entry.updatedAt) > input.notUsedSince) continue;
+          //
+          // Inclusive on purpose. The stamps are milliseconds, so a row touched
+          // in the same millisecond as the snapshot is indistinguishable from one
+          // touched just after it, and `>` dropped exactly those rows: a memory
+          // written during the await window could be retired in the same instant
+          // it was touched. Keeping one extra row costs a later retirement pass;
+          // retiring a freshly touched memory loses it.
+          if (input.notUsedSince != null && (entry.lastUsedAt ?? entry.updatedAt) >= input.notUsedSince) continue;
           entry.archivedAt = input.archivedAt;
           entry.updatedAt = now;
           archived += 1;
