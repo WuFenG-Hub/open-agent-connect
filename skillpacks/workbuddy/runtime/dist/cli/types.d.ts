@@ -548,6 +548,41 @@ export interface CliDependencies {
             budget: number;
         }) => Awaitable<MetabotCommandResult<unknown>>;
     };
+    longtask?: {
+        create?: (input: {
+            from?: string;
+            id: string;
+            title: string;
+            goal?: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        list?: (input: {
+            from?: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        show?: (input: {
+            from?: string;
+            id: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        board?: (input: {
+            from?: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        advance?: (input: {
+            from?: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        addSubtask?: (input: {
+            from?: string;
+            id: string;
+            subtaskId: string;
+            ordinal: number;
+            title: string;
+            dependsOn?: string[];
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        setSubtaskStatus?: (input: {
+            from?: string;
+            id: string;
+            subtaskId: string;
+            status: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+    };
     knowledgeBase?: {
         list?: (input: {
             from?: string;

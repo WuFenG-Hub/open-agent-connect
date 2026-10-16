@@ -39,6 +39,11 @@ export interface SurfSessionResult {
         pinId: string;
         action: MetawebSurfSeenAction;
     }>;
+    /** Set by the producer when the session was cut short (step ceiling,
+     *  watchdog timeout, LLM outage) instead of reaching its final report. A
+     *  truncated run that also produced no verifiable activity must not consume
+     *  the seen ledger — see the guard in runSurf. */
+    truncated?: string | null;
 }
 export interface SurfServiceDeps {
     botSlug: string;

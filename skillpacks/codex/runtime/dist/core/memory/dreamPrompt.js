@@ -3,12 +3,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DREAM_VERSION = exports.MAX_CAPABILITY_LEARNINGS = exports.MAX_KNOWLEDGE_UPDATES = exports.MAX_IMPRESSION_UPDATES = exports.MAX_VALUE_LESSONS = exports.MAX_IMPORTANT_MEMORIES = exports.SURF_REPORT_PROMPT_MAX_CHARS = exports.MAX_WORK_REVIEWS = exports.SELF_IDENTITY_MIN_CHARS = exports.DREAM_ACTIVITY_DEFAULT_TOKEN_BUDGET = exports.DREAM_WINDOW_END_MINUTES = exports.DREAM_RETRY_MAX_DELAY_MS = exports.DREAM_RETRY_BASE_DELAY_MS = exports.DREAM_LOOKBACK_DAYS = void 0;
+exports.DREAM_VERSION = exports.MAX_CAPABILITY_LEARNINGS = exports.MAX_KNOWLEDGE_UPDATES = exports.MAX_IMPRESSION_UPDATES = exports.MAX_VALUE_LESSONS = exports.MAX_IMPORTANT_MEMORIES = exports.SURF_REPORT_PROMPT_MAX_CHARS = exports.MAX_WORK_REVIEWS = exports.SELF_IDENTITY_MIN_CHARS = exports.DREAM_ACTIVITY_DEFAULT_TOKEN_BUDGET = exports.DREAM_WINDOW_END_MINUTES = exports.DREAM_RETRY_MAX_ATTEMPTS = exports.DREAM_RETRY_MAX_DELAY_MS = exports.DREAM_RETRY_BASE_DELAY_MS = exports.DREAM_LOOKBACK_DAYS = void 0;
 exports.computeDreamStaggerMinute = computeDreamStaggerMinute;
 exports.dreamStaggerSeedForSlug = dreamStaggerSeedForSlug;
 exports.countNonWhitespaceChars = countNonWhitespaceChars;
 exports.validateSelfIdentity = validateSelfIdentity;
 exports.computeDreamRetryDelayMs = computeDreamRetryDelayMs;
+exports.classifyDreamError = classifyDreamError;
 exports.computeDueDreamDates = computeDueDreamDates;
 exports.getDayBoundsMs = getDayBoundsMs;
 exports.buildDreamPrompt = buildDreamPrompt;
@@ -33,6 +34,10 @@ exports.DREAM_LOOKBACK_DAYS = 7;
  * abandoning a date after a short burst of transient failures. */
 exports.DREAM_RETRY_BASE_DELAY_MS = 30 * 60 * 1000;
 exports.DREAM_RETRY_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
+/** Total scheduled attempts (original + retries) for one dream date before the
+ * automatic retries stop. Without a cap a date that keeps failing is retried
+ * every window forever and nothing surfaces to the owner. */
+exports.DREAM_RETRY_MAX_ATTEMPTS = 5;
 /** Nightly dream window: [00:00, 06:00) local time. */
 exports.DREAM_WINDOW_END_MINUTES = 6 * 60;
 /** Default activity input budget for a day-level prompt, measured in tokens. */
@@ -76,6 +81,52 @@ function computeDreamRetryDelayMs(attemptCount) {
     const exponent = Math.min(4, normalizedAttempts - 1);
     return Math.min(exports.DREAM_RETRY_MAX_DELAY_MS, exports.DREAM_RETRY_BASE_DELAY_MS * (2 ** exponent));
 }
+/** Deterministic provider rejections that cannot be fixed by retrying: an
+ * expired or rejected credential, an unknown model, or exhausted quota fails
+ * identically on every later attempt. Without this split such a date is
+ * re-scheduled forever at the capped backoff, burning every nightly window
+ * with no terminal state and nothing the owner can see. */
+const DREAM_TERMINAL_ERROR_PATTERNS = [
+    'invalid_request_error',
+    'invalid_api_key',
+    'authentication_error',
+    'model_not_found',
+    'unauthorized',
+    'free_quota_exhausted',
+    'insufficient_quota',
+    '"code":"quota"',
+    "'code':'quota'",
+    '未配置任何可用的模型',
+];
+/** 4xx statuses that are transient by nature and stay in the retry class. */
+const DREAM_RETRYABLE_4XX_STATUSES = new Set([408, 429]);
+// The LLM layer surfaces provider statuses as `LLM request failed: <status>`, so
+// the check is anchored to that prefix — a body error id must never read as a
+// status.
+const DREAM_LLM_STATUS_PATTERN = /llm request failed:\s*(\d{3})/;
+const dreamStatusBoundary = (status) => new RegExp(`(?:^|[^0-9])${status}(?:[^0-9]|$)`);
+/** Terminal failures stop the automatic retries for their date; retryable ones
+ * keep the bounded backoff. */
+function classifyDreamError(error) {
+    const text = (typeof error === 'string'
+        ? error
+        : error instanceof Error
+            ? error.message
+            : error == null
+                ? ''
+                : String(error)).toLowerCase();
+    if (DREAM_TERMINAL_ERROR_PATTERNS.some((pattern) => text.includes(pattern)))
+        return 'terminal';
+    if (dreamStatusBoundary(401).test(text) || dreamStatusBoundary(403).test(text))
+        return 'terminal';
+    const statusMatch = DREAM_LLM_STATUS_PATTERN.exec(text);
+    if (statusMatch) {
+        const status = Number(statusMatch[1]);
+        if (status >= 400 && status < 500 && !DREAM_RETRYABLE_4XX_STATUSES.has(status))
+            return 'terminal';
+    }
+    return 'retryable';
+}
 /**
  * Which past dates still need dream attention for this bot.
  * - Candidates: the last `lookbackDays` calendar days, today excluded, and
@@ -116,6 +167,14 @@ function computeDueDreamDates(input) {
         if (state?.status === 'running')
             continue;
         if (state?.status === 'failed') {
+            // Two ways a failed date stops auto-retrying and waits for a manual
+            // `dream run`: the failure was deterministic (retrying cannot help), or
+            // the attempt budget is spent. Both keep the nightly window from
+            // re-running a date that cannot succeed.
+            if (classifyDreamError(state.error) === 'terminal')
+                continue;
+            if (state.attemptCount >= exports.DREAM_RETRY_MAX_ATTEMPTS)
+                continue;
             const retryAt = state.startedAt + computeDreamRetryDelayMs(state.attemptCount);
             if (input.now.getTime() < retryAt)
                 continue;

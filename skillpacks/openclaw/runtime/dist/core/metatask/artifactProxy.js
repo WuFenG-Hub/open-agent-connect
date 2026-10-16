@@ -59,8 +59,17 @@ async function fetchBytes(url, options) {
         const response = await options.fetchImpl(url, { signal: controller.signal });
         if (!response.ok)
             return null;
+        // Reject on the DECLARED length before reading the body: the cap has to
+        // bound what this proxy DOWNLOADS, not only what it keeps. A response that
+        // under-declares or omits the header is still caught after the read below.
+        const declaredHeader = response.headers.get('content-length');
+        const declaredBytes = declaredHeader === null ? Number.NaN : Number(declaredHeader);
+        if (Number.isFinite(declaredBytes) && declaredBytes > options.maxBytes)
+            return null;
         const contentType = asText(response.headers.get('content-type')).split(';')[0]?.trim() || 'application/octet-stream';
         const body = Buffer.from(await response.arrayBuffer());
+        if (body.length > options.maxBytes)
+            return null;
         return { body, contentType };
     }
     catch {
@@ -93,7 +102,7 @@ async function fetchMetafileContent(reference, options = {}) {
     }
     const baseUrl = (options.baseUrl ?? exports.DEFAULT_MANAPI_CONTENT_BASE_URL).replace(/\/+$/, '');
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const initial = await fetchBytes(`${baseUrl}/content/${encodeURIComponent(pinId)}`, { fetchImpl, timeoutMs });
+    const initial = await fetchBytes(`${baseUrl}/content/${encodeURIComponent(pinId)}`, { fetchImpl, timeoutMs, maxBytes: MAX_CONTENT_BYTES });
     if (!initial)
         return null;
     // Inline bytes (small files): the content route answers with the artifact
@@ -117,6 +126,11 @@ async function fetchMetafileContent(reference, options = {}) {
     let contentType;
     let fileName;
     if (manifest) {
+        // The manifest declares the aggregate size — honour it before pulling any
+        // chunk, so an oversize artifact costs one small request, not the whole file.
+        const declaredTotal = Number(manifest.fileSize);
+        if (Number.isFinite(declaredTotal) && declaredTotal > MAX_CONTENT_BYTES)
+            return null;
         const chunks = manifest.chunkList;
         const parts = [];
         let total = 0;
@@ -124,7 +138,11 @@ async function fetchMetafileContent(reference, options = {}) {
             const chunkPin = normalizeMetafileReference(asText(chunk.pinId));
             if (!chunkPin)
                 return null;
-            const fetched = await fetchBytes(`${baseUrl}/content/${encodeURIComponent(chunkPin)}`, { fetchImpl, timeoutMs });
+            const fetched = await fetchBytes(`${baseUrl}/content/${encodeURIComponent(chunkPin)}`, {
+                fetchImpl,
+                timeoutMs,
+                maxBytes: MAX_CONTENT_BYTES - total,
+            });
             if (!fetched)
                 return null;
             total += fetched.body.length;

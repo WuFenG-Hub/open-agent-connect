@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SURF_TOOL_ALLOWLIST = exports.SURF_SCHEDULED_TASK_CAP = exports.SURF_TURN_MAX_TOOL_STEPS = void 0;
+exports.SURF_TOOL_ALLOWLIST = exports.SURF_STEP_CEILING_SUMMARY = exports.SURF_SCHEDULED_TASK_CAP = exports.SURF_TURN_MAX_TOOL_STEPS = void 0;
 exports.parseJsonFence = parseJsonFence;
 exports.withSurfToolLoopContract = withSurfToolLoopContract;
 exports.runSurfTurnWithTools = runSurfTurnWithTools;
@@ -10,6 +10,10 @@ const prompt_js_1 = require("./prompt.js");
 exports.SURF_TURN_MAX_TOOL_STEPS = 96;
 /** Hard cap of scheduled tasks per surf run (IDBots parity). */
 exports.SURF_SCHEDULED_TASK_CAP = 2;
+/** The report summary this turn returns when it ran out of tool steps before
+ *  the model produced a final report. The report itself is non-null either way,
+ *  so consumers use this to tell a truncated run from a completed one. */
+exports.SURF_STEP_CEILING_SUMMARY = 'Surf turn hit the tool-step ceiling before emitting a final report.';
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const READ_TOOLS = [
     'search_metaweb',
@@ -274,7 +278,7 @@ async function runSurfTurnWithTools(prompt, deps) {
     // still produce — the caller parses a (possibly empty) report and the run
     // still settles honestly.
     return JSON.stringify({
-        summary: 'Surf turn hit the tool-step ceiling before emitting a final report.',
+        summary: exports.SURF_STEP_CEILING_SUMMARY,
         notes: 'Step ceiling reached; partial results are in the run stats.',
     });
 }

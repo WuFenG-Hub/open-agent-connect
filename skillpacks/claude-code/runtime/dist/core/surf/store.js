@@ -3,7 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.emptySurfRunStats = exports.SURF_SEEN_MAX_ROWS_PER_BOT = exports.SURF_SEEN_RETENTION_DAYS = exports.SEEN_ACTION_RANK = void 0;
+exports.emptySurfRunStats = exports.SURF_REPORT_DIGEST_SEPARATOR = exports.MAX_BRIEFING_MARKDOWN_CHARS = exports.MAX_REPORT_MARKDOWN_CHARS = exports.SURF_SEEN_MAX_ROWS_PER_BOT = exports.SURF_SEEN_RETENTION_DAYS = exports.SEEN_ACTION_RANK = void 0;
+exports.composeSurfReportMarkdown = composeSurfReportMarkdown;
+exports.surfSessionDidSomething = surfSessionDidSomething;
 exports.createMetawebSurfStore = createMetawebSurfStore;
 exports.isoNow = isoNow;
 // MetaWeb surf ("AI 冲浪") persistence, ported from IDBots
@@ -45,8 +47,34 @@ exports.SEEN_ACTION_RANK = {
 exports.SURF_SEEN_RETENTION_DAYS = 90;
 exports.SURF_SEEN_MAX_ROWS_PER_BOT = 5000;
 /** A run record keeps at most this many characters of rendered report. */
-const MAX_REPORT_MARKDOWN_CHARS = 20_000;
+exports.MAX_REPORT_MARKDOWN_CHARS = 20_000;
 const MAX_REPORT_JSON_CHARS = 40_000;
+/** The briefing digest rides in the same column as the report so every reader
+ * (CLI list/status, daemon, UI, the dream prompt) keeps working, but it gets
+ * its OWN budget: the digest is appended after the report, so one shared cap
+ * always cut the digest first and silently dropped the inbox/radar sections. */
+exports.MAX_BRIEFING_MARKDOWN_CHARS = 20_000;
+exports.SURF_REPORT_DIGEST_SEPARATOR = '\n\n---\n\n';
+/** Storage budget for the composed document: both parts stay whole. */
+const MAX_STORED_REPORT_MARKDOWN_CHARS = exports.MAX_REPORT_MARKDOWN_CHARS
+    + exports.MAX_BRIEFING_MARKDOWN_CHARS
+    + exports.SURF_REPORT_DIGEST_SEPARATOR.length;
+/** Compose the stored run document from a report and its briefing digest. The
+ * report is capped on its own budget BEFORE the digest is appended, so the
+ * digest can never be the thing the report cap cuts. */
+function composeSurfReportMarkdown(reportMarkdown, briefingMarkdown) {
+    const report = typeof reportMarkdown === 'string' && reportMarkdown
+        ? reportMarkdown.slice(0, exports.MAX_REPORT_MARKDOWN_CHARS)
+        : '';
+    const briefing = typeof briefingMarkdown === 'string' && briefingMarkdown
+        ? briefingMarkdown.slice(0, exports.MAX_BRIEFING_MARKDOWN_CHARS)
+        : '';
+    if (!report)
+        return briefing;
+    if (!briefing)
+        return report;
+    return `${report}${exports.SURF_REPORT_DIGEST_SEPARATOR}${briefing}`;
+}
 /** Run history kept per bot (matches the IDBots listRuns hard cap). */
 const MAX_RUNS_PER_BOT = 200;
 const emptySurfRunStats = () => ({
@@ -64,6 +92,25 @@ const emptySurfRunStats = () => ({
     tasksScheduled: 0,
 });
 exports.emptySurfRunStats = emptySurfRunStats;
+/** Whether the session produced any activity a consumer can verify.
+ *
+ * `fetched` is deliberately excluded: the briefing sets it, so it can never
+ * prove the session ran. The rest are the counters the session reports — for a
+ * truncated run they come from host receipts (see the watchdog / no-LLM paths
+ * in cli/runtime.ts), which is exactly the evidence that its work was real. */
+function surfSessionDidSomething(stats) {
+    return stats.deepRead > 0
+        || stats.savedToKb > 0
+        || stats.knowledgePoints > 0
+        || stats.liked > 0
+        || stats.commented > 0
+        || stats.answered > 0
+        || stats.posted > 0
+        || stats.challenged > 0
+        || stats.inboxHandled > 0
+        || stats.discoveredProtocols > 0
+        || stats.tasksScheduled > 0;
+}
 const RUNS_FILE_VERSION = 1;
 const PROTOCOL_STATE_FILE_VERSION = 1;
 const SEEN_PINS_FILE_VERSION = 1;
@@ -252,7 +299,7 @@ function createMetawebSurfStore(paths) {
                 run.status = outcome.status;
                 run.stats = normalizeStats(outcome.stats);
                 run.reportMarkdown = outcome.reportMarkdown
-                    ? outcome.reportMarkdown.slice(0, MAX_REPORT_MARKDOWN_CHARS)
+                    ? outcome.reportMarkdown.slice(0, MAX_STORED_REPORT_MARKDOWN_CHARS)
                     : null;
                 run.reportJson = outcome.reportJson
                     ? outcome.reportJson.slice(0, MAX_REPORT_JSON_CHARS)

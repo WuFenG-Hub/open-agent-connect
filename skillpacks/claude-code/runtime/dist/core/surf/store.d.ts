@@ -12,6 +12,18 @@ export type MetawebSurfSeenAction = 'presented' | 'skipped' | 'read' | 'saved' |
 export declare const SEEN_ACTION_RANK: Record<MetawebSurfSeenAction, number>;
 export declare const SURF_SEEN_RETENTION_DAYS = 90;
 export declare const SURF_SEEN_MAX_ROWS_PER_BOT = 5000;
+/** A run record keeps at most this many characters of rendered report. */
+export declare const MAX_REPORT_MARKDOWN_CHARS = 20000;
+/** The briefing digest rides in the same column as the report so every reader
+ * (CLI list/status, daemon, UI, the dream prompt) keeps working, but it gets
+ * its OWN budget: the digest is appended after the report, so one shared cap
+ * always cut the digest first and silently dropped the inbox/radar sections. */
+export declare const MAX_BRIEFING_MARKDOWN_CHARS = 20000;
+export declare const SURF_REPORT_DIGEST_SEPARATOR = "\n\n---\n\n";
+/** Compose the stored run document from a report and its briefing digest. The
+ * report is capped on its own budget BEFORE the digest is appended, so the
+ * digest can never be the thing the report cap cuts. */
+export declare function composeSurfReportMarkdown(reportMarkdown: string | null | undefined, briefingMarkdown: string | null | undefined): string;
 export interface MetawebSurfRunStats {
     fetched: number;
     deepRead: number;
@@ -28,6 +40,13 @@ export interface MetawebSurfRunStats {
     tasksScheduled: number;
 }
 export declare const emptySurfRunStats: () => MetawebSurfRunStats;
+/** Whether the session produced any activity a consumer can verify.
+ *
+ * `fetched` is deliberately excluded: the briefing sets it, so it can never
+ * prove the session ran. The rest are the counters the session reports — for a
+ * truncated run they come from host receipts (see the watchdog / no-LLM paths
+ * in cli/runtime.ts), which is exactly the evidence that its work was real. */
+export declare function surfSessionDidSomething(stats: MetawebSurfRunStats): boolean;
 export interface MetawebSurfRunRecord {
     id: string;
     trigger: MetawebSurfTrigger;

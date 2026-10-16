@@ -16,6 +16,10 @@ import type { SurfSessionWriteState } from './guard.js';
 export declare const SURF_TURN_MAX_TOOL_STEPS = 96;
 /** Hard cap of scheduled tasks per surf run (IDBots parity). */
 export declare const SURF_SCHEDULED_TASK_CAP = 2;
+/** The report summary this turn returns when it ran out of tool steps before
+ *  the model produced a final report. The report itself is non-null either way,
+ *  so consumers use this to tell a truncated run from a completed one. */
+export declare const SURF_STEP_CEILING_SUMMARY = "Surf turn hit the tool-step ceiling before emitting a final report.";
 /** IDBots METAWEB_SURF_TOOL_ALLOWLIST parity (memory tools gated separately). */
 export declare const SURF_TOOL_ALLOWLIST: Set<string>;
 export interface SurfScheduledTaskSpec {

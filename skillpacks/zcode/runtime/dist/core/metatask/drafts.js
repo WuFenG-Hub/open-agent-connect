@@ -17,12 +17,18 @@ const DRAFT_COMPETITIVE_EN = 'Please have the local MetaBot join the on-chain CO
 const DRAFT_ZH = '请让本机 MetaBot 参与链上任务「{title}」（任务根 pinId：{root}）。步骤：先用 `metabot metatask list` / `metabot metatask get --root <root>` 查看该任务的开放节点{node_hint}，从中挑选一个与技能匹配的节点，用 `metabot metatask claim --root <root> --node <id> --from <bot>` 认领（认领前守卫会先校验），按节点 spec 完成工作并用 `metabot metatask submit --request-file <json>` 提交；复核时遵守 #8/#9 门禁（semanticCheck 必填、fail 必带 failReason）且同侧目标不可复核。完成后向我汇报认领与提交的 pinId。';
 const DRAFT_COMPETITIVE_ZH = '请让本机 MetaBot 参与链上竞赛任务「{title}」（任务根 pinId：{root}）。这是 competitive 模式：没有节点锁，无需认领（`metabot metatask claim` 仅为意向声明），谁先做出高质量成果并通过复核谁就赢。步骤：先用 `metabot metatask list` / `metabot metatask get --root <root>` 查看任务的节点与依赖{node_hint}，挑选与技能匹配的节点；若该节点有 deps 前驱，先用 `metabot metatask get` 确认各前驱上你要引用的候选提交 pinId（未验证的父提交也可引用，属乐观抢跑、自担风险）；按节点 spec 完成工作后，用 `metabot metatask submit --request-file <json>` 提交并带上 parentRefs（每个 dep 引用一个提交 pinId；入口节点省略）。复核他人提交时遵守 #8/#9 门禁（semanticCheck 必填、fail 必带 failReason）且不可复核自己的提交。完成后向我汇报提交的 pinId。';
 /**
- * Suggested first node: among open nodes prefer entry nodes (deps: []) with
- * the fewest competing candidates, then the fewest deps, then id order; when
- * nothing is open the draft carries no hint.
+ * Suggested first node: among the nodes a participant can actually join, prefer
+ * entry nodes (deps: []) with the fewest competing candidates, then the fewest
+ * deps, then id order; when nothing is joinable the draft carries no hint.
+ *
+ * Joinable is MODE-AWARE. Tree mode takes only `open` nodes: a `claimed` one is
+ * locked by someone else and the claim guard refuses it (writer.ts), so
+ * suggesting it would hand the human a command that cannot succeed. Competitive
+ * mode has no node lock, so any non-verified node qualifies.
  */
 const suggestParticipateNode = (projection) => {
-    const open = Object.values(projection.nodeStates ?? {}).filter((node) => node.status !== 'verified');
+    const competitive = projection.policy?.mode === 'competitive';
+    const open = Object.values(projection.nodeStates ?? {}).filter((node) => competitive ? node.status !== 'verified' : node.status === 'open');
     if (open.length === 0)
         return null;
     const contenders = open.filter((node) => (node.deps ?? []).length === 0);
