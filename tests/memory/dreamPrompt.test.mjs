@@ -7,6 +7,7 @@ const {
   computeDreamStaggerMinute,
   computeDreamRetryDelayMs,
   computeDueDreamDates,
+  classifyDreamError,
   getDayBoundsMs,
   parseDreamOutput,
   buildDreamPrompt,
@@ -139,6 +140,69 @@ test('due dates: failed runs retry after backoff, running runs are skipped', () 
     dreamVersion: DREAM_VERSION,
   }]]);
   assert.ok(!computeDueDreamDates({ now, staggerSeed: 0, runStates: running }).dueDates.includes(date));
+});
+
+test('classifyDreamError: deterministic provider rejections are terminal, transport failures are not', () => {
+  // Deterministic: retrying cannot help, so the date must stop auto-retrying.
+  assert.equal(classifyDreamError('LLM request failed: 401 {"error":{"type":"authentication_error"}}'), 'terminal');
+  assert.equal(classifyDreamError('LLM request failed: 404 {"error":{"code":"model_not_found"}}'), 'terminal');
+  assert.equal(classifyDreamError('invalid_api_key'), 'terminal');
+  assert.equal(classifyDreamError('insufficient_quota'), 'terminal');
+  assert.equal(classifyDreamError('未配置任何可用的模型'), 'terminal');
+  // Transient: keep the existing bounded-backoff retry.
+  assert.equal(classifyDreamError('llm stream produced no chunk for 300000ms (idle timeout)'), 'retryable');
+  assert.equal(classifyDreamError('fetch failed'), 'retryable');
+  assert.equal(classifyDreamError('LLM request failed: 429 rate limit'), 'retryable');
+  assert.equal(classifyDreamError('LLM request failed: 503 Service Unavailable'), 'retryable');
+  assert.equal(classifyDreamError(null), 'retryable');
+});
+
+test('due dates: a deterministic provider rejection stops auto-retrying the date', () => {
+  const date = dateAt(1);
+  const now = new Date(2026, 7, 20, 10, 0);
+  // The failure is long past the 30 min backoff, so only classification can hold it back.
+  const terminalFail = new Map([[date, {
+    status: 'failed',
+    attemptCount: 1,
+    startedAt: now.getTime() - 45 * 60 * 1000,
+    dreamVersion: DREAM_VERSION,
+    error: 'LLM request failed: 401 {"error":{"type":"authentication_error"}}',
+  }]]);
+  assert.ok(
+    !computeDueDreamDates({ now, staggerSeed: 0, runStates: terminalFail }).dueDates.includes(date),
+    'a terminal provider rejection must not be scheduled again',
+  );
+});
+
+test('due dates: a retryable failure stops auto-retrying once the attempt budget is spent', () => {
+  const now = new Date(2026, 7, 20, 10, 0);
+  const date = dateAt(1);
+
+  const oneLeft = new Map([[date, {
+    status: 'failed',
+    attemptCount: 4,
+    // 5h ago: past the 4h backoff for attempt 4, so only the attempt budget can hold it back.
+    startedAt: now.getTime() - 5 * 60 * 60 * 1000,
+    dreamVersion: DREAM_VERSION,
+    error: 'fetch failed',
+  }]]);
+  assert.ok(
+    computeDueDreamDates({ now, staggerSeed: 0, runStates: oneLeft }).dueDates.includes(date),
+    'a retryable failure inside the attempt budget still retries',
+  );
+
+  const exhausted = new Map([[date, {
+    status: 'failed',
+    attemptCount: 5,
+    // 7h ago: past the 6h capped backoff, so only the attempt budget can hold it back.
+    startedAt: now.getTime() - 7 * 60 * 60 * 1000,
+    dreamVersion: DREAM_VERSION,
+    error: 'fetch failed',
+  }]]);
+  assert.ok(
+    !computeDueDreamDates({ now, staggerSeed: 0, runStates: exhausted }).dueDates.includes(date),
+    'the attempt budget must terminate the automatic retries',
+  );
 });
 
 test('parseDreamOutput: tolerant parse, caps, and legacy evaluation mapping', () => {
