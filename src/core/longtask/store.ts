@@ -33,6 +33,19 @@ import type {
 
 const FILE_VERSION = 1;
 
+/**
+ * The five central-registry keys this store needs. Taking them as a structural
+ * shape keeps the store free of a paths-module import while staying wired to
+ * the one place paths are resolved.
+ */
+export interface LongTermStoreRoots {
+  longtermRoot: string;
+  longtermTasksPath: string;
+  longtermSubtasksPath: string;
+  longtermEventsPath: string;
+  longtermNudgeStatePath: string;
+}
+
 export interface LongTermStorePaths {
   /** Directory holding the three JSON files. */
   root: string;
@@ -118,6 +131,17 @@ export interface LongTermStore {
   setNudgeState(taskId: string, state: Omit<LongTermNudgeState, 'taskId'>): Promise<LongTermNudgeState>;
   /** The board: every task with its column, progress and current sub-task. */
   getBoard(): Promise<LongTermBoardCard[]>;
+}
+
+/** Build the store straight from `resolveMetabotPaths(...)`. */
+export function longTermStorePaths(roots: LongTermStoreRoots): LongTermStorePaths {
+  return {
+    root: roots.longtermRoot,
+    tasksPath: roots.longtermTasksPath,
+    subtasksPath: roots.longtermSubtasksPath,
+    eventsPath: roots.longtermEventsPath,
+    nudgeStatePath: roots.longtermNudgeStatePath,
+  };
 }
 
 export function createLongTermStore(paths: LongTermStorePaths): LongTermStore {
