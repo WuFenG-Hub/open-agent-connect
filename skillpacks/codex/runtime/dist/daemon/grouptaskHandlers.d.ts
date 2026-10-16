@@ -7,6 +7,7 @@
  */
 import { type MetabotCommandResult } from '../core/contracts/commandResult';
 import { type GroupTaskServiceContext } from '../core/grouptask/service';
+import type { PeerTrustTierResolver } from '../core/trust/peerTrustResolver';
 import type { PinVerifier } from '../core/grouptask/deliverableVerification';
 import type { GroupTaskTransportOptions } from '../core/grouptask/transport';
 import type { ResolveSponsorWritePin } from '../core/signing/localMnemonicSigner';
@@ -32,6 +33,12 @@ export interface GroupTaskDaemonHandlers {
     setArchived: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
     invite: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
     invites: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
+    /** Guest-side pending invites across profiles (trust tiers P4b). */
+    invitesPending: () => Promise<MetabotCommandResult<unknown>>;
+    /** Approve a pending guest invite: join + ACCEPT reply + inviter marked contact. */
+    invitesApprove: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
+    /** Decline a pending guest invite and notify the inviter. */
+    invitesDecline: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
     collabs: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
     collabMessages: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
     health: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
@@ -58,6 +65,11 @@ export interface CreateGroupTaskDaemonHandlersInput {
     /** Deliverable pin verifier; enables the final verification pass at close. */
     verifyPin?: PinVerifier;
     transport?: GroupTaskTransportOptions;
+    /**
+     * Trust-tier resolver (trust tiers P4b): enables remote team seating by
+     * GlobalMetaID in createGroupTask and team-registry staffing candidates.
+     */
+    peerTrustTierResolver?: PeerTrustTierResolver;
     log?: (message: string) => void;
 }
 /** Build the production GroupTaskServiceContext (exported for engine reuse). */

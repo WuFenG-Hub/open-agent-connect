@@ -9,7 +9,8 @@
 > below are unchanged and fully generic in the subject — any MetaID (Bot,
 > Device, or future identity kinds) publishes the same pin shape, and
 > verifiers substitute the publisher's GlobalMetaID for `<botGlobalMetaId>`.
-> See "Generalized semantics" at the end of this document.
+> See "Generalized semantics" at the end of this document. Owner→owner trust
+> grants layered on top of these chains live in `09-simpletrust.md`.
 
 A MetaBot declares its human owner by publishing an `/info/owner` pin whose
 payload embeds the owner's cryptographic consent. The binding is two-party by

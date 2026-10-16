@@ -224,7 +224,9 @@ import { createUserDaemonHandlers } from './userHandlers';
 import { createOwnerDaemonHandlers } from './ownerHandlers';
 import { createTrustDaemonHandlers } from './trustHandlers';
 import { createBlockDaemonHandlers } from './blockHandlers';
+import { createTeamDaemonHandlers } from './teamHandlers';
 import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
+import { createRootOwnerResolver } from '../core/trust/rootOwnerResolver';
 import { evaluatePeerPolicy } from '../core/trust/trustPolicy';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
@@ -15090,6 +15092,13 @@ export function createDefaultMetabotDaemonHandlers(input: {
     block: createBlockDaemonHandlers({
       systemHomeDir: normalizedSystemHomeDir,
       onTrustConfigChanged: () => peerTrustTierResolver.invalidate(),
+    }),
+    // Remote team Bot registry (trust tiers P5): add verifies the peer's root
+    // owner against mine on-chain before recording (team_not_same_owner when
+    // they differ).
+    team: createTeamDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      rootOwnerResolver: createRootOwnerResolver({ systemHomeDir: normalizedSystemHomeDir }),
     }),
     network: {
       listServices: async ({ online, query, cached }) => {

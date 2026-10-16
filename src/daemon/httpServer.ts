@@ -27,6 +27,7 @@ import { handleUserRoutes } from './routes/user';
 import { handleOwnerRoutes } from './routes/owner';
 import { handleTrustRoutes } from './routes/trust';
 import { handleBlockRoutes } from './routes/block';
+import { handleTeamRoutes } from './routes/team';
 import { handleNetworkRoutes } from './routes/network';
 import { handleProviderRoutes } from './routes/provider';
 import { handleMetaAppRoutes } from './routes/metaapp';
@@ -67,6 +68,7 @@ const ROUTES: RouteHandler[] = [
   handleOwnerRoutes,
   handleTrustRoutes,
   handleBlockRoutes,
+  handleTeamRoutes,
   handleNetworkRoutes,
   handleProviderRoutes,
   handleMetaAppRoutes,

@@ -114,12 +114,44 @@ Open the Bot management page and keep the returned `localUiUrl`:
 {{METABOT_CLI}} ui open --page bot
 ```
 
+## The Bot → Device → Owner Identity Model (trust tiers)
+
+Local identities come in three layers:
+
+1. **Bot Identities** — the per-profile MetaIDs under
+   `~/.metabot/profiles/<slug>/`; each local Bot publishes an `/info/owner`
+   pin binding it to this device.
+2. **Device Identity** — the machine-wide MetaID wallet at
+   `~/.metabot/owner/identity.json` (managed with the historical
+   `metabot user *` commands). Every local Bot is accountable to it.
+3. **Owner Identity** — the human's portable, cross-device identity at
+   `~/.metabot/owner/root-owner-identity.json` (managed with
+   `metabot owner *`). Optional but recommended for multi-device setups: it
+   is what makes Bots on different devices one team.
+
+Set the Owner Identity up once per machine and bind the device to it:
+
+```bash
+{{METABOT_CLI}} owner create --name "Alice"     # or: owner import --mnemonic-stdin
+{{METABOT_CLI}} owner bind-device               # daemon: signs + publishes the device→owner /info/owner pin
+```
+
+A Bot identity is bound to exactly ONE device: never run the same Bot
+identity (mnemonic) on two machines. To work with your Bots across devices,
+give each device its own Bot identities under one shared Owner Identity,
+then register the remote Bots for cross-device group tasks:
+
+```bash
+{{METABOT_CLI}} team add <remoteBotGlobalMetaId>   # verifies same root owner on-chain
+{{METABOT_CLI}} team list
+```
+
 ## Importing an Existing Owner Identity
 
-`user import` restores the local owner identity from a BIP39 mnemonic. The
-mnemonic is a master secret: never pass it as a CLI argv value when a safer
-channel exists, because argv values land in shell history and process
-listings. Use one of the recommended channels instead.
+`user import` restores the local device identity from a BIP39 mnemonic;
+`owner import` does the same for the portable Owner Identity. The mnemonic
+is a master secret: never pass it as a CLI argv value when a safer channel
+exists, because argv values land in shell history and process listings. Use one of the recommended channels instead.
 
 For a human at a terminal, read the words from stdin (run the command, paste
 the words, press Ctrl-D):
@@ -256,6 +288,9 @@ If the human explicitly asks to write avatar on BTC, DOGE, or OPCAT, pass the ma
 - Persona setup and updates through `bot update`.
 - First-time bootstrap completion checks via `doctor` after create.
 - Identity-safe avatar write flow for `/info/avatar`.
+- The Bot → Device → Owner model: `metabot owner *` for the portable Owner
+  Identity (+ `owner bind-device`), `metabot team *` for cross-device team
+  Bots; one Bot identity per device, never shared across machines.
 
 ## Out of Scope
 
@@ -275,10 +310,11 @@ If the human explicitly asks to write avatar on BTC, DOGE, or OPCAT, pass the ma
 - Never pass an owner mnemonic through argv (`--mnemonic`); it lands in shell
   history and process listings. Use `--mnemonic-stdin` or `--request-file`,
   and delete the request file after a successful import.
-- `user delete` removes the owner identity and its locally stored mnemonic,
+- `user delete` removes the device identity and its locally stored mnemonic,
   which cannot be recovered. It requires `--confirm` (or `confirm: true` on
   the plugin route); only run it when the human explicitly asked, and back
-  the mnemonic up with `user reveal` first.
+  the mnemonic up with `user reveal` first. The Owner Identity
+  (`metabot owner *`) is a separate record and is not touched.
 - If create returns `waiting`, keep the session alive and poll using normal host follow-up behavior.
 - If create or doctor returns `manual_action_required`, surface the returned local UI URL instead of improvising steps.
 - If create returns `identity_name_taken`, do not force-create in another home; run `identity list` and use the existing profile by name via `--from`.

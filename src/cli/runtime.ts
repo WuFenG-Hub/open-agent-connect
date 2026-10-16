@@ -4328,6 +4328,12 @@ return {
       grant: async (input) => requestJson(context, 'POST', '/api/trust/grant', input),
       revoke: async (input) => requestJson(context, 'POST', '/api/trust/revoke', input),
     },
+    team: {
+      // team add verifies the shared root owner on-chain daemon-side.
+      list: async () => requestJson(context, 'GET', '/api/team/list'),
+      add: async (input) => requestJson(context, 'POST', '/api/team/add', input),
+      remove: async (input) => requestJson(context, 'POST', '/api/team/remove', input),
+    },
     network: {
       listServices: async (input) => {
         const query = new URLSearchParams();

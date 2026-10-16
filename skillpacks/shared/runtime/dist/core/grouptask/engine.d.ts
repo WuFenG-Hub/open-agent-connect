@@ -113,6 +113,19 @@ export interface GroupTaskEngineOptions {
      * every worker turn through the bare-LLM responder directly.
      */
     workerSessions?: boolean;
+    /**
+     * Trust-tier invite policy (trust tiers P4b): consulted after the existing
+     * validation, before any join. Resolves the INVITER's tier + accept
+     * behavior (context 'invite'); `auto` keeps the historical auto-accept,
+     * `queue` holds the invite for human approval (pending_approval), and
+     * `decline`/`ignore` record a silent decline. A throwing evaluator fails
+     * safe as `queue` (stranger). Absent = policy engine not wired — legacy
+     * auto-accept for every validated invite.
+     */
+    evaluatePeerInvitePolicy?: (inviterGlobalMetaId: string, guestProfile: GroupTaskProfileRef) => Promise<{
+        tier: string;
+        acceptBehavior: string;
+    }>;
 }
 export interface GroupTaskEngine {
     start(): void;

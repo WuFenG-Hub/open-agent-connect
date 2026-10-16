@@ -508,6 +508,7 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
                 memoryContext: input.memoryContext ?? null,
                 hostNoticeText: input.hostNoticeText ?? null,
                 episodeSummaryText: input.episodeSummaryText ?? null,
+                trustPolicyAllowedSkills: input.trustAllowedSkills ?? null,
             });
         }
         catch (error) {
@@ -695,6 +696,30 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
             return null;
         }
     }
+    // Consults the injected policy evaluator; NEVER throws. A failure (e.g. a
+    // chain read error) fails SAFE: the turn degrades to a stranger chat reply
+    // with no skills, and the degradation is logged as a send-failure event.
+    async function evaluatePeerTrustDecision(peerGlobalMetaId) {
+        if (!deps.evaluatePeerTrustPolicy) {
+            return { behavior: 'auto', allowedSkills: null, tier: null };
+        }
+        try {
+            const evaluation = await deps.evaluatePeerTrustPolicy(peerGlobalMetaId);
+            return {
+                behavior: evaluation.acceptBehavior,
+                allowedSkills: evaluation.allowedSkills,
+                tier: evaluation.tier,
+            };
+        }
+        catch (error) {
+            deps.logSendFailure?.({
+                kind: 'trust_policy_failed',
+                peerGlobalMetaId,
+                error: (0, privateChatSendFailureLog_1.describePrivateChatSendFailureError)(error),
+            });
+            return { behavior: 'auto', allowedSkills: [], tier: 'stranger' };
+        }
+    }
     async function replyToInboundMessage(input) {
         const replyKey = `${input.conversation.conversationId}:${input.inboundMessage.messageId}`;
         if (activeInboundReplies.has(replyKey))
@@ -798,6 +823,7 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
                     peerGlobalMetaId: input.peerGlobalMetaId,
                     userText: normalizeText(input.inboundMessage.content),
                 }),
+                trustAllowedSkills: input.trustAllowedSkills ?? null,
             });
             if (!preparedTurn) {
                 if (guidanceToConsume) {
@@ -1034,6 +1060,17 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
         const strategy = resolveEffectiveStrategy(conversation.strategyId
             ? await deps.strategyStore.getStrategy(conversation.strategyId)
             : null, config);
+        // Trust-tier policy (P4a) also gates wake/retry re-drives of a PEER's
+        // message — otherwise a stranger could receive skill-enabled replies
+        // through the silent-tail/empty-retry loop after the gated ingress turn
+        // stayed silent. Non-auto behaviors drop the wake (the ingress path
+        // already persisted/queued the message); failures fail safe as
+        // stranger-with-no-skills via the shared helper.
+        const wakeTrustDecision = await evaluatePeerTrustDecision(record.peerGlobalMetaId);
+        if (wakeTrustDecision.behavior !== 'auto') {
+            await wakeStore.remove(record.conversationId).catch(() => undefined);
+            return false;
+        }
         await recordHostStatusMessage({
             selfGlobalMetaId,
             peerGlobalMetaId: record.peerGlobalMetaId,
@@ -1051,6 +1088,7 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
             inboundMessage: triggerMessage,
             strategy,
             hostNoticeText,
+            trustAllowedSkills: wakeTrustDecision.allowedSkills,
         }));
     }
     async function fireDueWakes() {
@@ -1207,12 +1245,19 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
             const strategy = resolveEffectiveStrategy(conversation.strategyId
                 ? await deps.strategyStore.getStrategy(conversation.strategyId)
                 : null, config);
+            // Trust-tier policy (P4a): a backfill retry re-drives a PEER's message,
+            // so it consults the policy exactly like ingress/wake turns.
+            const retryTrustDecision = await evaluatePeerTrustDecision(normalizedPeerGlobalMetaId);
+            if (retryTrustDecision.behavior !== 'auto') {
+                return false;
+            }
             return runSerializedConversationTurn(conversation.conversationId, () => replyToInboundMessage({
                 selfGlobalMetaId,
                 peerGlobalMetaId: normalizedPeerGlobalMetaId,
                 conversation,
                 inboundMessage: latestMessage,
                 strategy,
+                trustAllowedSkills: retryTrustDecision.allowedSkills,
             }));
         },
         async retryOutboundMessage(peerGlobalMetaId, message) {
@@ -1465,6 +1510,30 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
                 }
             }
             inboundRepeatTracker.delete(conversation.conversationId);
+            // ---- Trust-tier policy gate (trust tiers P4a): consult BEFORE the
+            // auto-reply turn for private_chat messages. The message is already
+            // persisted above in every branch; only the LLM turn is gated.
+            const trustDecision = await evaluatePeerTrustDecision(peerGlobalMetaId);
+            if (trustDecision.behavior === 'ignore' || trustDecision.behavior === 'decline') {
+                // blocked (or a decline override): record-only — no turn, no reply,
+                // and no silent-tail wake can be scheduled for this message (wakes
+                // are only armed by reply attempts, and the obsolete-tail wake was
+                // already removed above).
+                await deps.stateStore.upsertConversation(conversation);
+                return;
+            }
+            if (trustDecision.behavior === 'queue') {
+                // Lightest existing pattern, no new queue UI: pause the conversation
+                // (the auto-reply path below naturally no-ops on non-active states)
+                // and surface the queued message through the EXISTING pending-guidance
+                // mechanism — a human reviews it in the operator UI and a guided turn
+                // (human-initiated, full skills) consumes the guidance.
+                conversation = { ...conversation, state: 'paused', updatedAt: now };
+                await deps.stateStore.upsertConversation(conversation);
+                await deps.stateStore.setPendingGuidance(conversation.conversationId, `[Queued by trust policy (tier: ${trustDecision.tier ?? 'unknown'})] `
+                    + `Message from ${peerGlobalMetaId}: ${inboundWireContent.content.trim().slice(0, 200)}`, now).catch(() => undefined);
+                return;
+            }
             await runSerializedConversationTurn(conversation.conversationId, async () => {
                 // Re-read inside the per-conversation mutex so back-to-back inbound
                 // messages cannot lose turnCount increments to a read-modify-write
@@ -1500,6 +1569,7 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
                     conversation,
                     strategy,
                     inboundMessage: inboundMessageRecord,
+                    trustAllowedSkills: trustDecision.allowedSkills,
                 });
             });
         },
@@ -1513,8 +1583,11 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
             const conversation = await deps.stateStore.getConversationByPeer(normalizedPeerGlobalMetaId);
             if (!conversation)
                 return;
-            if (conversation.state !== 'active' && conversation.state !== 'closed')
+            // 'paused' is allowed too: it is the trust-policy queue state (P4a) —
+            // a human-guided turn is exactly how a queued conversation resumes.
+            if (conversation.state !== 'active' && conversation.state !== 'closed' && conversation.state !== 'paused') {
                 return;
+            }
             const strategy = resolveEffectiveStrategy(conversation.strategyId
                 ? await deps.strategyStore.getStrategy(conversation.strategyId)
                 : null, config);
@@ -1529,7 +1602,10 @@ function createPrivateChatAutoReplyOrchestrator(deps, config) {
                     turnCount: 1,
                 }
                 : {
+                    // A 'paused' (queued) conversation resumes to active, keeping its
+                    // episode continuity.
                     ...conversation,
+                    state: 'active',
                     turnCount: conversation.turnCount + 1,
                 };
             const persona = await (0, chatPersonaLoader_1.loadChatPersona)(deps.paths);

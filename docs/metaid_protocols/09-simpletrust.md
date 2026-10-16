@@ -1,7 +1,8 @@
 # 09. SimpleTrust (`/protocols/simpletrust`)
 
 > Status: draft (Open Agent Connect trust tiers P2, branch `feat-trust-tiers`).
-> Companion protocols: owner binding (`07-owner-binding.md`), blocklist
+> Companion protocols: owner binding (`07-owner-binding.md`, the
+> Bot → Device → Owner chain these grants sit on top of), blocklist
 > (`04-chat-messaging.md` §3).
 
 An Owner declares which **other owners** it trusts by publishing append-only

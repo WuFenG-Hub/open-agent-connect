@@ -121,6 +121,13 @@ export interface CliDependencies {
     /** Publish revoke pin(s) for an owner GlobalMetaID or grant pinId. */
     revoke?: (input: { target: string }) => Awaitable<MetabotCommandResult<unknown>>;
   };
+  team?: {
+    /** Remote team Bot registry: local profiles + manual/auto registry entries. */
+    list?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Verify same root owner on-chain, then record the remote Bot. */
+    add?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    remove?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;

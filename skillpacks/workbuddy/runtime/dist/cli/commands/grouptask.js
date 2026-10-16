@@ -350,6 +350,28 @@ async function runGroupTaskCommand(args, context) {
         });
     }
     if (action === 'invites') {
+        // Trust tiers P4b: `invites list|approve|decline` is the guest-side
+        // approval surface for invites the policy held (stranger tier). Bare
+        // `invites --task <id>` keeps the inviter-side per-task list.
+        const sub = normalizeText(args[1]);
+        if (sub === 'list') {
+            const handler = requireHandler(context, 'invitesPending');
+            if (!handler)
+                return (0, commandResult_1.commandFailed)('not_implemented', 'Group task invites list handler is not configured.');
+            return handler({});
+        }
+        if (sub === 'approve' || sub === 'decline') {
+            const handler = requireHandler(context, sub === 'approve' ? 'invitesApprove' : 'invitesDecline');
+            if (!handler)
+                return (0, commandResult_1.commandFailed)('not_implemented', `Group task invites ${sub} handler is not configured.`);
+            const inviteId = normalizeText(args[2]) || normalizeText((0, helpers_1.readFlagValue)(args, '--invite-id'));
+            if (!inviteId)
+                return (0, commandResult_1.commandFailed)('missing_invite_id', `Usage: metabot grouptask invites ${sub} <inviteId>`);
+            return handler({
+                inviteId,
+                ...(sub === 'decline' ? { reason: normalizeText((0, helpers_1.readFlagValue)(args, '--reason')) || undefined } : {}),
+            });
+        }
         const handler = requireHandler(context, 'invites');
         if (!handler)
             return (0, commandResult_1.commandFailed)('not_implemented', 'Group task invites handler is not configured.');

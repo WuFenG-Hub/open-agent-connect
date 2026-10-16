@@ -41,5 +41,9 @@ function createDefaultConfig() {
             defaultChainName: 'mvc',
             localMode: true,
         },
+        trust: {
+            skillClassOverrides: {},
+            chatTrustPolicy: {},
+        },
     };
 }

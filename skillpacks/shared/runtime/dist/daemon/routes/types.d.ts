@@ -180,6 +180,57 @@ export interface MetabotDaemonHttpHandlers {
         /** Advance the onboarding pipeline on demand (idempotent, shared runner). */
         runOnboarding?: () => Awaitable<MetabotCommandResult<unknown>>;
     };
+    /** Root Owner Identity (the `metabot owner *` CLI surface, trust tiers P1):
+     *  the human's portable machine-wide identity above the Device Identity.
+     *  create/import also return the mnemonic (shown once). */
+    owner?: {
+        who?: () => Awaitable<MetabotCommandResult<unknown>>;
+        create?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        import?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        rename?: (input: {
+            name: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Sign (root owner key) + publish (device identity) the /info/owner
+         *  device->owner binding pin. */
+        bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
+    };
+    /** On-chain owner trust grants (`metabot trust *`, trust tiers P2):
+     *  grant/revoke publish /protocols/simpletrust pins from the root owner;
+     *  list resolves the effective set (grants minus revokes) from chain. */
+    trust?: {
+        list?: () => Awaitable<MetabotCommandResult<unknown>>;
+        grant?: (input: {
+            trustedOwner: string;
+            note?: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        revoke?: (input: {
+            target: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+    };
+    /** Device-level blocklist (`metabot block *`, trust tiers P2): local
+     *  `~/.metabot/owner/trust-local.json`; add/remove also invalidate the
+     *  peer's cached trust resolution. */
+    block?: {
+        list?: () => Awaitable<MetabotCommandResult<unknown>>;
+        add?: (input: {
+            globalMetaId: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        remove?: (input: {
+            globalMetaId: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+    };
+    /** Remote team Bot registry (`metabot team *`, trust tiers P5): lists
+     *  remote Bots bound to the same root owner; add verifies the root owner
+     *  on-chain before recording (team_not_same_owner otherwise). */
+    team?: {
+        list?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        add?: (input: {
+            globalMetaId: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        remove?: (input: {
+            globalMetaId: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+    };
     network?: {
         listServices?: (input: {
             online?: boolean;
@@ -350,6 +401,12 @@ export interface MetabotDaemonHttpHandlers {
         setArchived?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         invite?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         invites?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Guest-side pending invites across profiles (trust tiers P4b). */
+        invitesPending?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Approve a pending guest invite (join + ACCEPT + mark inviter contact). */
+        invitesApprove?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Decline a pending guest invite and notify the inviter. */
+        invitesDecline?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         collabs?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         collabMessages?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         health?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;

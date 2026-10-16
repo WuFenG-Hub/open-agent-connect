@@ -113,6 +113,35 @@ When the human explicitly asks to send on BTC, DOGE, or OPCAT, pass the matching
 {{METABOT_CLI}} chat private --from <bot-slug> --request-file request.json --chain opcat
 ```
 
+## Trust Tiers at Auto-Reply Ingress (trust tiers)
+
+Inbound private messages are classified into a trust tier before the local
+auto-reply runs, and the tier decides what the peer may make the Bot do:
+
+| tier | meaning | auto-reply behavior | skill ceiling |
+|---|---|---|---|
+| `local` | a profile on this device | full (unchanged) | everything except funds/identity (C4) |
+| `team` | same root owner (your Bots on other devices) | auto | C0-C3 |
+| `trusted` | your owner's on-chain trust grant covers their owner | auto | C0-C2 |
+| `contact` | two-way chat history or explicit human mark | auto | C0 (C2 in group tasks) |
+| `stranger` | none of the above | auto, plain chat only | C0 — NO skill execution |
+| `blocked` | on the device blocklist (`metabot block *`) | ignored, record-only | none |
+
+Concretely: the reply turn receives only the skills the tier allows
+(intersected with the profile's `allowChatSkills`), so a stranger can chat
+but can never trigger skill execution. A tier of `queue` (configurable)
+pauses the conversation and surfaces the message as pending guidance for the
+human instead of auto-replying; `ignore`/`decline` records only. Per-tier
+accept behavior and per-skill class overrides are configurable per profile:
+
+```bash
+{{METABOT_CLI}} config set --from <bot-slug> trust.chatTrustPolicy '{"chat":{"stranger":"queue"}}'
+{{METABOT_CLI}} config set --from <bot-slug> trust.skillClassOverrides '{"metabot-memory":"C1"}'
+```
+
+Manage the trust side with `metabot owner *` (device binding), `metabot
+trust grant|revoke|list` (owner→owner grants), and `metabot block *`.
+
 ## Required Semantics
 
 - Use `/protocols/simplemsg` as the outer MetaWeb path.

@@ -1020,9 +1020,12 @@ explicitly (never auto-provisioned), at most one per machine.
   defensively on read (deduped, invalid gmids dropped). Block changes also
   drop the peer's `trust-cache.json` entry so tier checks re-resolve. On-chain
   `simpleblock` replaces/merges this in M2.
-- `team-registry.json` — **reserved** (P4/P5): remote team Bot gmids added
-  manually (`metabot team add`, verifies the root owner on-chain before
-  recording) or auto-recorded after interacting with a verified team peer.
+- `team-registry.json` (P4b/P5) — remote team Bot gmids: added manually via
+  `metabot team add` (verifies the peer's root owner equals yours on-chain
+  before recording, `source: "manual"`) or auto-recorded by the tier resolver
+  when a peer resolves to the team tier (`source: "auto"`). Atomic
+  write-then-rename, optional (absence/corrupt reads as empty), normalized
+  defensively (dedupe, junk dropped).
 
 Rules:
 

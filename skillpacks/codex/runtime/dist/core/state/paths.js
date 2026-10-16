@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveMetabotPaths = resolveMetabotPaths;
 exports.resolveMetabotDaemonPaths = resolveMetabotDaemonPaths;
+exports.resolveMetabotOwnerPaths = resolveMetabotOwnerPaths;
 const node_path_1 = __importDefault(require("node:path"));
 function normalizeInputHomeDir(homeDir) {
     const normalizedHomeDir = typeof homeDir === 'string' ? homeDir.trim() : '';
@@ -191,5 +192,18 @@ function resolveMetabotDaemonPaths(systemHomeDir) {
         daemonLockPath: node_path_1.default.join(locksRoot, 'daemon.lock'),
         daemonLogPath: node_path_1.default.join(logsRoot, 'daemon.log'),
         migrationStatePath: node_path_1.default.join(recoveryRoot, 'migration.json'),
+    };
+}
+function resolveMetabotOwnerPaths(systemHomeDir) {
+    const normalizedSystemHomeDir = normalizeInputHomeDir(systemHomeDir);
+    const ownerRoot = node_path_1.default.join(normalizedSystemHomeDir, '.metabot', 'owner');
+    return {
+        systemHomeDir: normalizedSystemHomeDir,
+        ownerRoot,
+        deviceIdentityPath: node_path_1.default.join(ownerRoot, 'identity.json'),
+        rootOwnerIdentityPath: node_path_1.default.join(ownerRoot, 'root-owner-identity.json'),
+        trustCachePath: node_path_1.default.join(ownerRoot, 'trust-cache.json'),
+        trustLocalPath: node_path_1.default.join(ownerRoot, 'trust-local.json'),
+        teamRegistryPath: node_path_1.default.join(ownerRoot, 'team-registry.json'),
     };
 }

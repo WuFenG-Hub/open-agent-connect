@@ -27,6 +27,7 @@ import type { PeerTrustTier } from './capabilityClasses';
 import { createRootOwnerResolver, type RootOwnerResolver } from './rootOwnerResolver';
 import { createTrustedOwnerResolver, type TrustedOwnerResolver } from './trustedOwnerResolver';
 import { createTrustLocalStore } from './trustLocalStore';
+import { createTeamRegistryStore } from './teamRegistryStore';
 
 const DEFAULT_TIER_CACHE_TTL_MS = 60_000;
 
@@ -75,6 +76,20 @@ export function createPeerTrustResolver(input: CreatePeerTrustResolverInput): Pe
   // In-process tier memo: key = `${profileHomeDir ?? '*'}|${peerGmid}`.
   const tierCache = new Map<string, { tier: PeerTrustTier; expiresAt: number }>();
 
+  // Best-effort team-registry upsert (P5): records a freshly resolved team
+  // peer as an 'auto' entry so discovery/seating surfaces can propose it.
+  // Skips the write when the gmid is already recorded.
+  async function recordTeamPeer(peer: string): Promise<void> {
+    const store = createTeamRegistryStore(systemHomeDir);
+    const entries = await store.list();
+    if (entries.some((entry) => entry.globalMetaId === peer)) return;
+    await store.upsert({
+      globalMetaId: peer,
+      source: 'auto',
+      addedAt: new Date(now()).toISOString(),
+    });
+  }
+
   function cacheKey(profileHomeDir: string | undefined, peer: string): string {
     return `${profileHomeDir ?? '*'}|${peer}`;
   }
@@ -100,6 +115,10 @@ export function createPeerTrustResolver(input: CreatePeerTrustResolverInput): Pe
       (await rootOwnerResolver.resolveRootOwner(peer)).rootOwnerGlobalMetaId,
     );
     if (myRootOwner && peerRootOwner === myRootOwner) {
+      // Auto-record team peers in the registry (P5): a convenience for
+      // discovery/seating. Best-effort by contract — a registry failure must
+      // never break tier resolution.
+      await recordTeamPeer(peer).catch(() => undefined);
       return 'team';
     }
 

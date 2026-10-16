@@ -335,6 +335,7 @@ function createGroupTaskStore(paths) {
                 createdAt: Date.now(),
                 displayName: input.displayName?.trim() || null,
                 seatRole: input.seatRole?.trim() || null,
+                via: input.via ?? null,
                 removedAt: null,
                 removePinId: null,
                 status: 'assigned',

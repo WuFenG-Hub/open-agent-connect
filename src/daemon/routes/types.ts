@@ -206,6 +206,14 @@ export interface MetabotDaemonHttpHandlers {
     add?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
     remove?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
   };
+  /** Remote team Bot registry (`metabot team *`, trust tiers P5): lists
+   *  remote Bots bound to the same root owner; add verifies the root owner
+   *  on-chain before recording (team_not_same_owner otherwise). */
+  team?: {
+    list?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    add?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    remove?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;

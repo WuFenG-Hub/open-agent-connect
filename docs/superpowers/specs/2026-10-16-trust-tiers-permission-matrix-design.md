@@ -1,7 +1,11 @@
 # Trust Tiers & Permission Matrix Design (Bot → Device → Owner)
 
 **Date:** 2026-10-16
-**Status:** Draft — in implementation on branch `feat-trust-tiers`
+**Status: Implemented (P0–P5, branch `feat-trust-tiers`)** — all phases
+landed: identity model + resolvers (P1), on-chain grants + local trust store
+(P2), tier resolver + policy engine (P3), enforcement at chat ingress (P4a),
+OpenTeam invite policy + team seating (P4b), and the team registry CLI +
+SKILL/docs finish (P5). Phase notes below record what shipped.
 **(updated 2026-10-16): P1 landed** — Owner Identity CRUD
 (`src/core/owner/rootOwnerIdentity.ts`), device→owner binding publish
 (`src/core/owner/deviceOwnerBinding.ts`), root-owner resolver + trust cache
@@ -39,8 +43,21 @@ fail safe as stranger-with-no-skills (`trust_policy_failed` log event).
 (`recordExternallyRelayedInbound`) is unchanged — relayed profiles delegate
 judgment to the bound assistant (its own model decides), and the tier policy
 gates the local auto-reply path only.
-Not yet landed: P4b (OpenTeam invite acceptance), P4c (group-task team
-seating), P5 final CLI naming.
+**(updated 2026-10-16): P4b landed** — OpenTeam invite tier gate
+(`pending_approval` + silent blocked decline + fail-safe hold), the
+`grouptask invites list|approve|decline` approval surface (approve runs the
+shared accept path and records the inviter as a contact), and group-task team
+seating by gmid (pre-validated tier 'team' before any chain write, roster
+`via: 'team'`, existing OpenTeam transport, staffing candidates from the team
+registry). See the Enforcement Points statuses below.
+**(updated 2026-10-16): P5 landed (final phase)** — `metabot team
+list|add|remove` with same-root-owner verification on `add`
+(`team_not_same_owner` otherwise) and best-effort auto-recording of team-tier
+peers (`source: 'manual'|'auto'` registry entries); CLI naming settled (OQ2:
+`user` = device identity, `owner` = the human's portable identity; OQ4
+resolved — TTL + event-driven invalidation + fresh block reads is the
+designed behavior); SKILL updates (grouptask / chat-privatechat /
+identity-manage / help) and Settings copy synced en+zh. Feature complete.
 
 ## Goal
 
@@ -346,10 +363,15 @@ pending ). Slow files are added to `INTEGRATION_FILES` in
    tells the user exactly that the device wallet needs a manual top-up.
    Pin writes also bill the traffic sponsor hook first whenever the daemon
    has one, same as owner `/info/name` pins.
-2. CLI naming: keep `metabot user *` operating on the device identity and add
-   `metabot owner *` for the root owner? Final naming in P5. (P1 ships the
-   minimal `metabot owner create|import|who|rename|reveal|exists|path|bind-device`
-   surface; naming revision stays open.)
+2. CLI naming — **RESOLVED (P5, 2026-10-16): keep `metabot user *` on the
+   DEVICE identity, `metabot owner *` for the root Owner Identity.** Rationale:
+   `user *` shipped in an earlier release together with the Settings User tab
+   and its docs; renaming it would churn user-facing surfaces for purely
+   semantic gain. Instead the semantic layering is documented everywhere the
+   two meet: `user` = this device's machine-wide identity (what Bots bind
+   to), `owner` = the human's portable cross-device identity. CLI help, the
+   Settings copy (en+zh), and the identity SKILL carry the device-vs-owner
+   wording.
 3. Whether `contact` C2 scope (group-task context only) needs an explicit
    sandbox-path allow-list in the executor, or the existing work-dir
    convention is sufficient — **P3 decision (convention, documented)**: the
@@ -360,8 +382,11 @@ pending ). Slow files are added to `INTEGRATION_FILES` in
    `contact` receives C2 skills only in group-task context; a path-jailing
    executor is deferred until a real escape is observed — the skill
    capability registry gives a single place to tighten classes if one is.
-4. Trust-cache staleness policy (P1): a cache hit inside a 5-minute TTL is
-   served without any chain read; misses/expires re-walk and store the new
-   pinIds; `invalidate(subject)` drops entries event-driven. Whether P4
-   enforcement needs sub-TTL invalidation on binding-change events is
-   decided when the enforcement points land.
+4. Trust-cache staleness policy — **RESOLVED (P5, 2026-10-16): the P1 design
+   shipped unchanged and is the intended behavior.** Binding/grant caches use
+   a 5-minute TTL with pinId-keyed entries; the tier cache adds a 60-second
+   TTL; the blocklist/contacts are fresh-read on every resolution (a block
+   lands instantly); grant/revoke/block daemon handlers invalidate the tier
+   cache event-driven. No sub-TTL binding-event invalidation was needed in
+   practice: enforcement points re-resolve per message and the fresh block
+   read covers the safety-critical path.

@@ -10,6 +10,8 @@ const agent_browser_core_1 = require("@openagentinternet/agent-browser-core");
 const homeSelection_1 = require("../state/homeSelection");
 const paths_1 = require("../state/paths");
 const configTypes_1 = require("./configTypes");
+const skillCapabilityClasses_1 = require("../services/skillCapabilityClasses");
+const trustPolicy_1 = require("../trust/trustPolicy");
 async function ensureLayout(paths) {
     await node_fs_1.promises.mkdir(node_path_1.default.dirname(paths.configPath), { recursive: true });
     try {
@@ -109,10 +111,18 @@ function normalizeConfig(input) {
     const chainSource = maybeChain && typeof maybeChain === 'object'
         ? maybeChain
         : {};
+    const maybeTrust = root['trust'];
+    const trustSource = maybeTrust && typeof maybeTrust === 'object'
+        ? maybeTrust
+        : {};
     const defaultWriteNetwork = normalizeString(chainSource.defaultWriteNetwork).toLowerCase();
     const browserDefaultChainName = normalizeString(browserSource.defaultChainName).toLowerCase();
     const walletApiBaseUrl = normalizeString(browserSource.walletApiBaseUrl) || defaults.browser.walletApiBaseUrl;
     const normalizedConfig = {
+        trust: {
+            skillClassOverrides: (0, skillCapabilityClasses_1.normalizeSkillClassOverrides)(trustSource.skillClassOverrides),
+            chatTrustPolicy: (0, trustPolicy_1.normalizeChatTrustPolicy)(trustSource.chatTrustPolicy),
+        },
         chain: {
             defaultWriteNetwork: (0, configTypes_1.isDefaultWriteNetwork)(defaultWriteNetwork)
                 ? defaultWriteNetwork

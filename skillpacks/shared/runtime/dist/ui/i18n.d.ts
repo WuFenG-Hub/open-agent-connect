@@ -541,10 +541,10 @@ export declare const DICTIONARIES: {
         readonly 'settings.language.title': "Language and Localization";
         readonly 'settings.language.body': "Choose the language for OAC-owned local UI chrome and Settings.";
         readonly 'settings.user.title': "User";
-        readonly 'settings.user.body': "The owner identity is the human account that owns this console and its Bots. It is stored machine-wide under ~/.metabot/owner/.";
+        readonly 'settings.user.body': "This device identity is the machine-wide MetaID wallet that owns this console and its Bots. It is stored under ~/.metabot/owner/. Your portable, cross-device identity is managed under Owner (metabot owner).";
         readonly 'settings.user.loading': "Loading the owner identity...";
-        readonly 'settings.user.emptyTitle': "No owner identity on this machine yet";
-        readonly 'settings.user.emptyBody': "Create a new identity, or import one from an existing mnemonic, so your Bots have an owner to belong to.";
+        readonly 'settings.user.emptyTitle': "No device identity on this machine yet";
+        readonly 'settings.user.emptyBody': "Create a new identity, or import one from an existing mnemonic, so your Bots have a device identity to belong to.";
         readonly 'settings.user.fieldName': "Display name";
         readonly 'settings.user.namePlaceholder': "e.g. Alice";
         readonly 'settings.user.fieldMnemonic': "Mnemonic (12 or 24 words)";
@@ -2279,10 +2279,10 @@ export declare const DICTIONARIES: {
         readonly 'settings.language.title': "语言和本地化";
         readonly 'settings.language.body': "选择 OAC 本地界面导航和设置页面使用的语言。";
         readonly 'settings.user.title': "用户";
-        readonly 'settings.user.body': "所有者身份是使用本控制台及其 Bot 的人类账户，整机唯一，存储在 ~/.metabot/owner/。";
+        readonly 'settings.user.body': "设备身份是本机整机唯一的 MetaID 钱包，归本控制台及其 Bot 所有，存储在 ~/.metabot/owner/。你跨设备携带的身份请在 Owner（metabot owner）中管理。";
         readonly 'settings.user.loading': "正在加载所有者身份…";
-        readonly 'settings.user.emptyTitle': "这台机器上还没有所有者身份";
-        readonly 'settings.user.emptyBody': "创建新身份，或从已有助记词导入，让你的 Bot 有归属的所有者。";
+        readonly 'settings.user.emptyTitle': "这台机器上还没有设备身份";
+        readonly 'settings.user.emptyBody': "创建新身份，或从已有助记词导入，让你的 Bot 归属于这台设备。";
         readonly 'settings.user.fieldName': "显示名称";
         readonly 'settings.user.namePlaceholder': "例如 Alice";
         readonly 'settings.user.fieldMnemonic': "助记词（12 或 24 个单词）";
