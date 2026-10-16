@@ -28,6 +28,10 @@ export const DREAM_LOOKBACK_DAYS = 7;
  * abandoning a date after a short burst of transient failures. */
 export const DREAM_RETRY_BASE_DELAY_MS = 30 * 60 * 1000;
 export const DREAM_RETRY_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
+/** Total scheduled attempts (original + retries) for one dream date before the
+ * automatic retries stop. Without a cap a date that keeps failing is retried
+ * every window forever and nothing surfaces to the owner. */
+export const DREAM_RETRY_MAX_ATTEMPTS = 5;
 /** Nightly dream window: [00:00, 06:00) local time. */
 export const DREAM_WINDOW_END_MINUTES = 6 * 60;
 /** Default activity input budget for a day-level prompt, measured in tokens. */
@@ -171,6 +175,9 @@ export type DreamParseResult =
 export interface DreamRunStateLike {
   status: 'running' | 'completed' | 'failed';
   attemptCount: number;
+  /** Failure message kept on the run; it separates deterministic rejections
+   * from transient failures. Absent on legacy records. */
+  error?: string | null;
   /** Run start (epoch ms). A completed run is final only when it started after
    * the dream date ended — i.e. it reviewed the whole day. */
   startedAt: number;
@@ -211,6 +218,53 @@ export function computeDreamRetryDelayMs(attemptCount: number): number {
   const normalizedAttempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
   const exponent = Math.min(4, normalizedAttempts - 1);
   return Math.min(DREAM_RETRY_MAX_DELAY_MS, DREAM_RETRY_BASE_DELAY_MS * (2 ** exponent));
+}
+
+/** Deterministic provider rejections that cannot be fixed by retrying: an
+ * expired or rejected credential, an unknown model, or exhausted quota fails
+ * identically on every later attempt. Without this split such a date is
+ * re-scheduled forever at the capped backoff, burning every nightly window
+ * with no terminal state and nothing the owner can see. */
+const DREAM_TERMINAL_ERROR_PATTERNS = [
+  'invalid_request_error',
+  'invalid_api_key',
+  'authentication_error',
+  'model_not_found',
+  'unauthorized',
+  'free_quota_exhausted',
+  'insufficient_quota',
+  '"code":"quota"',
+  "'code':'quota'",
+  '未配置任何可用的模型',
+];
+
+/** 4xx statuses that are transient by nature and stay in the retry class. */
+const DREAM_RETRYABLE_4XX_STATUSES = new Set([408, 429]);
+
+// The LLM layer surfaces provider statuses as `LLM request failed: <status>`, so
+// the check is anchored to that prefix — a body error id must never read as a
+// status.
+const DREAM_LLM_STATUS_PATTERN = /llm request failed:\s*(\d{3})/;
+const dreamStatusBoundary = (status: number): RegExp => new RegExp(`(?:^|[^0-9])${status}(?:[^0-9]|$)`);
+
+/** Terminal failures stop the automatic retries for their date; retryable ones
+ * keep the bounded backoff. */
+export function classifyDreamError(error: unknown): 'terminal' | 'retryable' {
+  const text = (typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : error == null
+        ? ''
+        : String(error)).toLowerCase();
+  if (DREAM_TERMINAL_ERROR_PATTERNS.some((pattern) => text.includes(pattern))) return 'terminal';
+  if (dreamStatusBoundary(401).test(text) || dreamStatusBoundary(403).test(text)) return 'terminal';
+  const statusMatch = DREAM_LLM_STATUS_PATTERN.exec(text);
+  if (statusMatch) {
+    const status = Number(statusMatch[1]);
+    if (status >= 400 && status < 500 && !DREAM_RETRYABLE_4XX_STATUSES.has(status)) return 'terminal';
+  }
+  return 'retryable';
 }
 
 /**
@@ -260,6 +314,12 @@ export function computeDueDreamDates(input: {
     const state = input.runStates.get(dateStr);
     if (state?.status === 'running') continue;
     if (state?.status === 'failed') {
+      // Two ways a failed date stops auto-retrying and waits for a manual
+      // `dream run`: the failure was deterministic (retrying cannot help), or
+      // the attempt budget is spent. Both keep the nightly window from
+      // re-running a date that cannot succeed.
+      if (classifyDreamError(state.error) === 'terminal') continue;
+      if (state.attemptCount >= DREAM_RETRY_MAX_ATTEMPTS) continue;
       const retryAt = state.startedAt + computeDreamRetryDelayMs(state.attemptCount);
       if (input.now.getTime() < retryAt) continue;
     }
