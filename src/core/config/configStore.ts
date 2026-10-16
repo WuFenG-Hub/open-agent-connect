@@ -12,6 +12,8 @@ import {
   isDefaultWriteNetwork,
   type MetabotConfig,
 } from './configTypes';
+import { normalizeSkillClassOverrides } from '../services/skillCapabilityClasses';
+import { normalizeChatTrustPolicy } from '../trust/trustPolicy';
 
 async function ensureLayout(paths: MetabotPaths): Promise<void> {
   await fs.mkdir(path.dirname(paths.configPath), { recursive: true });
@@ -124,12 +126,20 @@ function normalizeConfig(input: unknown): MetabotConfig {
   const chainSource = maybeChain && typeof maybeChain === 'object'
     ? maybeChain as Record<string, unknown>
     : {};
+  const maybeTrust = root['trust'];
+  const trustSource = maybeTrust && typeof maybeTrust === 'object'
+    ? maybeTrust as Record<string, unknown>
+    : {};
 
   const defaultWriteNetwork = normalizeString(chainSource.defaultWriteNetwork).toLowerCase();
   const browserDefaultChainName = normalizeString(browserSource.defaultChainName).toLowerCase();
   const walletApiBaseUrl = normalizeString(browserSource.walletApiBaseUrl) || defaults.browser.walletApiBaseUrl;
 
   const normalizedConfig: MetabotConfig = {
+    trust: {
+      skillClassOverrides: normalizeSkillClassOverrides(trustSource.skillClassOverrides),
+      chatTrustPolicy: normalizeChatTrustPolicy(trustSource.chatTrustPolicy),
+    },
     chain: {
       defaultWriteNetwork: isDefaultWriteNetwork(defaultWriteNetwork)
         ? defaultWriteNetwork

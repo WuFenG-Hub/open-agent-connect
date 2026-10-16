@@ -26,7 +26,7 @@ function createPrivateChatAllowedSkillsResolver(input) {
         warning: scope.warning,
         checkedAt: new Date().toISOString(),
     }).catch(() => undefined);
-    return async () => {
+    return async (policyAllowedSkills) => {
         const profile = await (0, metabotProfileManager_1.getMetabotProfile)(input.paths.systemHomeDir, input.metaBotSlug);
         if (!profile || profile.allowChatSkills.length === 0) {
             const emptyScope = emptyPrivateChatAllowedSkillScope();
@@ -48,7 +48,7 @@ function createPrivateChatAllowedSkillsResolver(input) {
         if (result.warning) {
             input.logWarning?.('[private chat allowed skills]', result.warning);
         }
-        const scope = {
+        let scope = {
             skills: result.skills.map((skill) => skill.skillName),
             skillSourcePaths: result.skillSourcePaths,
             skillDetails: result.skills.map((skill) => ({
@@ -63,6 +63,20 @@ function createPrivateChatAllowedSkillsResolver(input) {
             skippedSkills: result.skippedSkills,
             warning: result.warning ?? null,
         };
+        // Trust-tier policy (P4a): keep only the skills this peer's tier allows.
+        // An empty filter list means "plain chat, no skill execution" (e.g. a
+        // stranger) — NOT "no filtering"; absence of the argument is the legacy
+        // unfiltered path.
+        if (policyAllowedSkills) {
+            const allowed = new Set(policyAllowedSkills);
+            const skills = scope.skills.filter((skillName) => allowed.has(skillName));
+            scope = {
+                ...scope,
+                skills,
+                skillSourcePaths: Object.fromEntries(Object.entries(scope.skillSourcePaths).filter(([skillName]) => allowed.has(skillName))),
+                skillDetails: scope.skillDetails.filter((detail) => allowed.has(detail.name)),
+            };
+        }
         await persistResolution(scope);
         return scope;
     };

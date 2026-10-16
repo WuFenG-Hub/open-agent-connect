@@ -22,6 +22,8 @@ const staffing_1 = require("./staffing");
 const staffingStore_1 = require("./staffingStore");
 const service_1 = require("./service");
 Object.defineProperty(exports, "GroupTaskServiceError", { enumerable: true, get: function () { return service_1.GroupTaskServiceError; } });
+const paths_1 = require("../state/paths");
+const teamRegistryStore_1 = require("../trust/teamRegistryStore");
 async function proposeGroupTaskStaffing(ctx, input, now = Date.now) {
     const chair = input.chairSlug?.trim()
         ? await (0, service_1.requireProfile)(ctx, input.chairSlug)
@@ -158,11 +160,40 @@ async function createGroupTaskFromProposal(ctx, input) {
                     : seat.role;
             }
         }
+        // Trust tiers P4b: team-registry Bots are remote-seating candidates too.
+        // Only verified team-tier gmids are passed through (createGroupTask fails
+        // closed on anything else); stale entries are skipped with a log line.
+        const localSeats = (0, staffing_1.localSeatSlugs)(plan);
+        const workerRefs = [...localSeats];
+        try {
+            const chairProfile = await (0, service_1.requireProfile)(ctx, gate.proposal.chairSlug);
+            const systemHomeDir = (0, paths_1.resolveMetabotPaths)(chairProfile.homeDir).systemHomeDir;
+            const registryGmids = await (0, teamRegistryStore_1.listTeamRegistryGmids)(systemHomeDir);
+            const remoteSeatGmids = new Set((0, staffing_1.remoteSeats)(plan)
+                .map((seat) => (seat.candidateGlobalMetaId ?? '').trim().toLowerCase())
+                .filter(Boolean));
+            for (const gmid of registryGmids) {
+                if (workerRefs.some((ref) => ref.toLowerCase() === gmid) || remoteSeatGmids.has(gmid))
+                    continue;
+                if (!ctx.resolvePeerTrustTier)
+                    break;
+                const tier = await ctx.resolvePeerTrustTier(gmid).catch(() => null);
+                if (tier !== 'team') {
+                    ctx.log?.(`[Staffing] Team-registry candidate ${gmid} skipped (tier: ${tier ?? 'unresolvable'}).`);
+                    continue;
+                }
+                workerRefs.push(gmid);
+            }
+        }
+        catch {
+            // Registry candidates are additive; a broken registry never blocks
+            // staffing creation.
+        }
         const created = await (0, service_1.createGroupTask)(ctx, {
             title: gate.proposal.title,
             goal: gate.proposal.goal,
             acceptanceCriteria: gate.proposal.acceptanceCriteria,
-            workerSlugs: (0, staffing_1.localSeatSlugs)(plan),
+            workerSlugs: workerRefs,
             seatRoles: Object.keys(seatRoles).length > 0 ? seatRoles : null,
             chairSlug: gate.proposal.chairSlug,
             createdBy: 'twinbot',

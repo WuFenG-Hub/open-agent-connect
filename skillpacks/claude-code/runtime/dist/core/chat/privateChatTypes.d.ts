@@ -76,6 +76,14 @@ export interface ChatReplyRunnerInput {
     memoryContext?: string | null;
     conversationCloseAllowed?: boolean;
     onSkillExecutionStart?: () => void;
+    /**
+     * Trust-tier policy filter for this turn (trust tiers P4a): the effective
+     * skill set the peer's tier allows (tier classes ∩ allowChatSkills ∩
+     * overrides). The allowed-skills resolver intersects its resolved scope
+     * with this list. Null/absent = no policy filtering — the legacy full
+     * allowChatSkills scope (local/human-initiated turns).
+     */
+    trustPolicyAllowedSkills?: string[] | null;
     hostNoticeText?: string | null;
     episodeSummaryText?: string | null;
 }

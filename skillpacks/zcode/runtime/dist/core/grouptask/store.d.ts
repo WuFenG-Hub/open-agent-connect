@@ -48,6 +48,7 @@ export interface AddGroupTaskMemberInput {
     joinedPinId?: string | null;
     displayName?: string | null;
     seatRole?: string | null;
+    via?: 'openteam' | 'team' | null;
 }
 export interface MarkGroupTaskMemberRemovedInput {
     taskId: number;

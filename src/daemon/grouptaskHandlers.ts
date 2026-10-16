@@ -38,10 +38,14 @@ import {
 } from '../core/grouptask/service';
 import {
   inviteRemoteMember,
+  listGuestInvitesAcrossProfiles,
   listOpenTeamCollabMessages,
   listOpenTeamCollabs,
   listOpenTeamInvites,
+  approveGuestInvite,
+  declineGuestInviteById,
 } from '../core/grouptask/openteamService';
+import type { PeerTrustTierResolver } from '../core/trust/peerTrustResolver';
 import { getGroupTaskHealth } from '../core/grouptask/health';
 import { resolveGroupTaskEngineLogPath } from '../core/grouptask/engineLog';
 import {
@@ -95,6 +99,12 @@ export interface GroupTaskDaemonHandlers {
   setArchived: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
   invite: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
   invites: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
+  /** Guest-side pending invites across profiles (trust tiers P4b). */
+  invitesPending: () => Promise<MetabotCommandResult<unknown>>;
+  /** Approve a pending guest invite: join + ACCEPT reply + inviter marked contact. */
+  invitesApprove: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
+  /** Decline a pending guest invite and notify the inviter. */
+  invitesDecline: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
   collabs: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
   collabMessages: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
   health: (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
@@ -216,6 +226,11 @@ export interface CreateGroupTaskDaemonHandlersInput {
   /** Deliverable pin verifier; enables the final verification pass at close. */
   verifyPin?: PinVerifier;
   transport?: GroupTaskTransportOptions;
+  /**
+   * Trust-tier resolver (trust tiers P4b): enables remote team seating by
+   * GlobalMetaID in createGroupTask and team-registry staffing candidates.
+   */
+  peerTrustTierResolver?: PeerTrustTierResolver;
   log?: (message: string) => void;
 }
 
@@ -302,6 +317,13 @@ export function createGroupTaskServiceContext(
     },
     ...(input.transport ? { transport: input.transport } : {}),
     ...(input.verifyPin ? { verifyPin: input.verifyPin } : {}),
+    ...(input.peerTrustTierResolver
+      ? {
+        resolvePeerTrustTier: (globalMetaId: string) => input.peerTrustTierResolver!.resolvePeerTrustTier({
+          peerGlobalMetaId: globalMetaId,
+        }),
+      }
+      : {}),
     ...(input.log ? { log: input.log } : {}),
   };
 }
@@ -549,6 +571,33 @@ export function createGroupTaskDaemonHandlers(
       const ref = readTaskRef(body);
       if (isFailure(ref)) return ref;
       return run(async () => ({ invites: await listOpenTeamInvites(ctx, ref.chair, ref.taskId) }));
+    },
+
+    // Trust tiers P4b: guest-side approval surface for invites held by the
+    // invite policy (stranger tier → pending_approval).
+    invitesPending: async () => run(async () => ({
+      invites: await listGuestInvitesAcrossProfiles(ctx),
+    })),
+
+    invitesApprove: async (body) => {
+      const inviteId = normalizeText(body.inviteId);
+      if (!inviteId) return commandFailed('missing_invite_id', 'inviteId is required');
+      return run(async () => {
+        const approved = await approveGuestInvite(ctx, inviteId);
+        return {
+          invite: approved.record,
+          joinedPinId: approved.joinedPinId,
+          contactMarked: approved.record.inviterGlobalMetaId,
+        };
+      });
+    },
+
+    invitesDecline: async (body) => {
+      const inviteId = normalizeText(body.inviteId);
+      if (!inviteId) return commandFailed('missing_invite_id', 'inviteId is required');
+      return run(async () => ({
+        invite: (await declineGuestInviteById(ctx, inviteId, normalizeText(body.reason) || undefined)).record,
+      }));
     },
 
     collabs: async () => run(async () => listOpenTeamCollabs(ctx)),

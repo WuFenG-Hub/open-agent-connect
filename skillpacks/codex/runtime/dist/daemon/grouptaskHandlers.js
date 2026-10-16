@@ -185,6 +185,13 @@ function createGroupTaskServiceContext(input) {
         },
         ...(input.transport ? { transport: input.transport } : {}),
         ...(input.verifyPin ? { verifyPin: input.verifyPin } : {}),
+        ...(input.peerTrustTierResolver
+            ? {
+                resolvePeerTrustTier: (globalMetaId) => input.peerTrustTierResolver.resolvePeerTrustTier({
+                    peerGlobalMetaId: globalMetaId,
+                }),
+            }
+            : {}),
         ...(input.log ? { log: input.log } : {}),
     };
 }
@@ -422,6 +429,32 @@ function createGroupTaskDaemonHandlers(input) {
             if (isFailure(ref))
                 return ref;
             return run(async () => ({ invites: await (0, openteamService_1.listOpenTeamInvites)(ctx, ref.chair, ref.taskId) }));
+        },
+        // Trust tiers P4b: guest-side approval surface for invites held by the
+        // invite policy (stranger tier → pending_approval).
+        invitesPending: async () => run(async () => ({
+            invites: await (0, openteamService_1.listGuestInvitesAcrossProfiles)(ctx),
+        })),
+        invitesApprove: async (body) => {
+            const inviteId = normalizeText(body.inviteId);
+            if (!inviteId)
+                return (0, commandResult_1.commandFailed)('missing_invite_id', 'inviteId is required');
+            return run(async () => {
+                const approved = await (0, openteamService_1.approveGuestInvite)(ctx, inviteId);
+                return {
+                    invite: approved.record,
+                    joinedPinId: approved.joinedPinId,
+                    contactMarked: approved.record.inviterGlobalMetaId,
+                };
+            });
+        },
+        invitesDecline: async (body) => {
+            const inviteId = normalizeText(body.inviteId);
+            if (!inviteId)
+                return (0, commandResult_1.commandFailed)('missing_invite_id', 'inviteId is required');
+            return run(async () => ({
+                invite: (await (0, openteamService_1.declineGuestInviteById)(ctx, inviteId, normalizeText(body.reason) || undefined)).record,
+            }));
         },
         collabs: async () => run(async () => (0, openteamService_1.listOpenTeamCollabs)(ctx)),
         collabMessages: async (body) => {

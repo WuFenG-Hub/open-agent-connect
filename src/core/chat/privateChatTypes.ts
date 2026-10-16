@@ -90,6 +90,14 @@ export interface ChatReplyRunnerInput {
   // orchestrator uses it to send the peer a short wait notice before a long
   // skill execution; it must never break the reply path.
   onSkillExecutionStart?: () => void;
+  /**
+   * Trust-tier policy filter for this turn (trust tiers P4a): the effective
+   * skill set the peer's tier allows (tier classes ∩ allowChatSkills ∩
+   * overrides). The allowed-skills resolver intersects its resolved scope
+   * with this list. Null/absent = no policy filtering — the legacy full
+   * allowChatSkills scope (local/human-initiated turns).
+   */
+  trustPolicyAllowedSkills?: string[] | null;
   // Host-injected notice appended to the prompt (wake checks, empty-reply
   // retries). Empty/null means a plain turn.
   hostNoticeText?: string | null;

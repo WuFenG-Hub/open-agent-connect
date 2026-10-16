@@ -1,4 +1,8 @@
 import { type MetabotCommandResult } from '../core/contracts/commandResult';
+import { type ConfigStore } from '../core/config/configStore';
+import { type DefaultWriteNetwork } from '../core/config/configTypes';
+import { type SkillCapabilityClass } from '../core/services/skillCapabilityClasses';
+import { type ChatTrustPolicyConfig } from '../core/trust/trustPolicy';
 import { type IdentityProfileRecord } from '../core/identity/identityProfiles';
 import { type MetabotPaths } from '../core/state/paths';
 import type { Signer } from '../core/signing/signer';
@@ -43,6 +47,23 @@ export declare function createServiceRefundSyncLoop(input: {
     logWarning?: (message: string) => void;
 }): ServiceRefundSyncLoop;
 export declare function getDefaultDaemonPort(_systemHomeDir?: string): number;
+type SupportedBooleanConfigKey = 'a2a.simplemsgListenerEnabled' | 'chain.mvcSponsorUploadEnabled' | 'automation.dreamTickEnabled' | 'automation.chainHistorySummaryEnabled';
+type SupportedEnumConfigKey = 'chain.defaultWriteNetwork';
+type SupportedObjectConfigKey = 'trust.skillClassOverrides' | 'trust.chatTrustPolicy';
+type SupportedConfigKey = SupportedBooleanConfigKey | SupportedEnumConfigKey | SupportedObjectConfigKey;
+type SupportedConfigValue = boolean | DefaultWriteNetwork | Record<string, SkillCapabilityClass> | ChatTrustPolicyConfig;
+export declare function readConfigValue(config: Awaited<ReturnType<ConfigStore['read']>>, key: SupportedConfigKey): SupportedConfigValue;
+export declare function writeConfigValue(config: Awaited<ReturnType<ConfigStore['read']>>, key: SupportedConfigKey, value: SupportedConfigValue): Awaited<ReturnType<ConfigStore['read']>>;
+export declare function normalizeConfigValueForKey(input: {
+    key: SupportedConfigKey;
+    value: boolean | string | Record<string, unknown>;
+}): {
+    ok: true;
+    value: SupportedConfigValue;
+} | {
+    ok: false;
+    message: string;
+};
 export declare function getDaemonRuntimeFingerprint(rootDir?: string): string;
 export declare function buildDaemonConfigHash(env: NodeJS.ProcessEnv, options?: {
     runtimeFingerprint?: string;

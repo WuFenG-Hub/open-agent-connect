@@ -27,6 +27,7 @@ const PAGE_SOURCES = [
   'src/ui/pages/refund/app.ts',
   'src/ui/pages/conversations/app.ts',
   'src/ui/pages/tracking/app.ts',
+  'src/ui/pages/team/app.ts',
 ];
 
 const HTML_TEMPLATES = [
@@ -35,6 +36,7 @@ const HTML_TEMPLATES = [
   'src/ui/pages/hub/index.html',
   'src/ui/pages/publish/index.html',
   'src/ui/pages/refund/index.html',
+  'src/ui/pages/team/index.html',
 ];
 
 // The console pages whose <title> carries a dictionary key: the renderer tags
@@ -45,6 +47,7 @@ const TITLE_KEY_PAGES = [
   ['surf', 'buildSurfPageDefinition', 'surf.title'],
   ['memory', 'buildMemoryPageDefinition', 'memory.title'],
   ['schedule', 'buildSchedulePageDefinition', 'schedule.title'],
+  ['team', 'buildTeamPageDefinition', 'team.title'],
 ];
 
 // Non-copy literals that legitimately never enter the dictionary: brand and

@@ -93,6 +93,7 @@ function createOpenTeamStore(paths) {
                 createdAt: Date.now(),
                 respondedAt: null,
                 memberAddedAt: null,
+                via: input.via ?? null,
             };
             state.invites.push(record);
             return record;
@@ -131,7 +132,7 @@ function createOpenTeamStore(paths) {
                 declineReason: input.declineReason ?? null,
                 joinedPinId: input.joinedPinId ?? null,
                 createdAt: Date.now(),
-                respondedAt: input.status === 'invited' ? null : Date.now(),
+                respondedAt: (input.status === 'invited' || input.status === 'pending_approval') ? null : Date.now(),
             };
             state.guestInvites.push(record);
             return record;
@@ -170,6 +171,7 @@ function createOpenTeamStore(paths) {
                 leftAt: null,
                 leftCause: null,
                 leftReason: null,
+                via: input.via ?? null,
             };
             // Unique (groupId, slug): re-inviting a left member reactivates the row.
             const existing = state.memberships.find((entry) => entry.groupId === input.groupId && entry.slug === input.slug);
@@ -186,6 +188,7 @@ function createOpenTeamStore(paths) {
                     leftAt: null,
                     leftCause: null,
                     leftReason: null,
+                    via: record.via ?? existing.via ?? null,
                 });
                 return { ...existing };
             }

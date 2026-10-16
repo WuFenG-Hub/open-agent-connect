@@ -25,6 +25,16 @@ import {
   DEFAULT_WRITE_NETWORKS,
   type DefaultWriteNetwork,
 } from '../core/config/configTypes';
+import {
+  normalizeSkillClassOverrides,
+  type SkillCapabilityClass,
+} from '../core/services/skillCapabilityClasses';
+import {
+  normalizeChatTrustPolicy,
+  evaluatePeerPolicy,
+  type ChatTrustPolicyConfig,
+} from '../core/trust/trustPolicy';
+import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
 import { bindHostSkills, bindPlatformSkills, HostSkillBindingError } from '../core/host/hostSkillBinding';
 import {
   bindHostPersonaProjection,
@@ -593,9 +603,11 @@ type SupportedBooleanConfigKey =
 
 type SupportedEnumConfigKey = 'chain.defaultWriteNetwork';
 
-type SupportedConfigKey = SupportedBooleanConfigKey | SupportedEnumConfigKey;
+type SupportedObjectConfigKey = 'trust.skillClassOverrides' | 'trust.chatTrustPolicy';
 
-type SupportedConfigValue = boolean | DefaultWriteNetwork;
+type SupportedConfigKey = SupportedBooleanConfigKey | SupportedEnumConfigKey | SupportedObjectConfigKey;
+
+type SupportedConfigValue = boolean | DefaultWriteNetwork | Record<string, SkillCapabilityClass> | ChatTrustPolicyConfig;
 
 const SUPPORTED_CONFIG_KEYS = new Set<SupportedConfigKey>([
   'a2a.simplemsgListenerEnabled',
@@ -603,6 +615,8 @@ const SUPPORTED_CONFIG_KEYS = new Set<SupportedConfigKey>([
   'chain.mvcSponsorUploadEnabled',
   'automation.dreamTickEnabled',
   'automation.chainHistorySummaryEnabled',
+  'trust.skillClassOverrides',
+  'trust.chatTrustPolicy',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -620,7 +634,7 @@ function isSupportedBooleanConfigKey(key: SupportedConfigKey): key is SupportedB
     || key === 'automation.chainHistorySummaryEnabled';
 }
 
-function readConfigValue(
+export function readConfigValue(
   config: Awaited<ReturnType<ConfigStore['read']>>,
   key: SupportedConfigKey,
 ): SupportedConfigValue {
@@ -636,14 +650,38 @@ function readConfigValue(
   if (key === 'automation.dreamTickEnabled') {
     return config.automation.dreamTickEnabled;
   }
+  if (key === 'trust.skillClassOverrides') {
+    return config.trust.skillClassOverrides;
+  }
+  if (key === 'trust.chatTrustPolicy') {
+    return config.trust.chatTrustPolicy;
+  }
   return config.automation.chainHistorySummaryEnabled;
 }
 
-function writeConfigValue(
+export function writeConfigValue(
   config: Awaited<ReturnType<ConfigStore['read']>>,
   key: SupportedConfigKey,
   value: SupportedConfigValue,
 ): Awaited<ReturnType<ConfigStore['read']>> {
+  if (key === 'trust.skillClassOverrides') {
+    return {
+      ...config,
+      trust: {
+        ...config.trust,
+        skillClassOverrides: normalizeSkillClassOverrides(value),
+      },
+    };
+  }
+  if (key === 'trust.chatTrustPolicy') {
+    return {
+      ...config,
+      trust: {
+        ...config.trust,
+        chatTrustPolicy: normalizeChatTrustPolicy(value),
+      },
+    };
+  }
   if (key === 'chain.defaultWriteNetwork') {
     return {
       ...config,
@@ -692,9 +730,9 @@ function writeConfigValue(
   return config;
 }
 
-function normalizeConfigValueForKey(input: {
+export function normalizeConfigValueForKey(input: {
   key: SupportedConfigKey;
-  value: boolean | string;
+  value: boolean | string | Record<string, unknown>;
 }): {
   ok: true;
   value: SupportedConfigValue;
@@ -702,6 +740,22 @@ function normalizeConfigValueForKey(input: {
   ok: false;
   message: string;
 } {
+  if (input.key === 'trust.skillClassOverrides' || input.key === 'trust.chatTrustPolicy') {
+    // Object-valued keys arrive as JSON strings from `metabot config set`.
+    let parsed: unknown = input.value;
+    if (typeof input.value === 'string') {
+      try {
+        parsed = JSON.parse(input.value);
+      } catch {
+        return { ok: false, message: `Config key ${input.key} requires a JSON object value.` };
+      }
+    }
+    if (input.key === 'trust.skillClassOverrides') {
+      return { ok: true, value: normalizeSkillClassOverrides(parsed) };
+    }
+    return { ok: true, value: normalizeChatTrustPolicy(parsed) };
+  }
+
   if (isSupportedBooleanConfigKey(input.key)) {
     if (typeof input.value !== 'boolean') {
       return {
@@ -2482,6 +2536,11 @@ export function createPrivateChatAutoReplyProfileDispatcher(
     async handleInboundMessage(profile, message) {
       const orchestrator = await getOrCreateOrchestrator(profile);
       if (!orchestrator) return;
+      // Trust tiers P4a: the tier policy (evaluatePeerTrustPolicy) gates the
+      // LOCAL auto-reply path only. The Grok-webhook relay below delegates
+      // judgment to the bound assistant — its own model decides how to answer
+      // — so relayed profiles never run the local policy gate; tier policy
+      // for relayed assistants is the host platform's concern.
       if (!input.handleOrderProtocolMessageForProfile) {
         const genericMessage = normalizeDispatcherPrivateChatMessage(message);
         if (classifySimplemsgContent(message.content).kind !== 'order_protocol') {
@@ -4257,6 +4316,24 @@ return {
       update: async (input) => requestJson(context, 'POST', '/api/user/update', input),
       runOnboarding: async () => requestJson(context, 'POST', '/api/user/onboarding', {}),
     },
+    owner: {
+      // bind-device publishes the device→owner /info/owner pin daemon-side
+      // (signer + traffic sponsor hook live there); the CLI only forwards.
+      bindDevice: async () => requestJson(context, 'POST', '/api/owner/bind-device', {}),
+    },
+    trust: {
+      // grant/revoke publish /protocols/simpletrust pins daemon-side (owner
+      // signer + sponsor hook live there); list resolves from chain there.
+      list: async () => requestJson(context, 'GET', '/api/trust/list'),
+      grant: async (input) => requestJson(context, 'POST', '/api/trust/grant', input),
+      revoke: async (input) => requestJson(context, 'POST', '/api/trust/revoke', input),
+    },
+    team: {
+      // team add verifies the shared root owner on-chain daemon-side.
+      list: async () => requestJson(context, 'GET', '/api/team/list'),
+      add: async (input) => requestJson(context, 'POST', '/api/team/add', input),
+      remove: async (input) => requestJson(context, 'POST', '/api/team/remove', input),
+    },
     network: {
       listServices: async (input) => {
         const query = new URLSearchParams();
@@ -4558,6 +4635,9 @@ return {
         setArchived: post('/api/grouptask/archive'),
         invite: post('/api/grouptask/invite'),
         invites: get('/api/grouptask/invites'),
+        invitesPending: post('/api/grouptask/invites/pending'),
+        invitesApprove: post('/api/grouptask/invites/approve'),
+        invitesDecline: post('/api/grouptask/invites/decline'),
         collabs: get('/api/grouptask/collabs'),
         collabMessages: get('/api/grouptask/collab-messages'),
         health: get('/api/grouptask/health'),
@@ -7883,6 +7963,11 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   const groupTaskEngineLog = createGroupTaskEngineLogWriter({
     logFile: resolveGroupTaskEngineLogPath(daemonPaths.logsRoot),
   });
+  // Trust-tier resolver for group-task team seating + the invite policy
+  // (trust tiers P4b): one shared instance per runtime, injected into the
+  // service context (remote seating by gmid) and the engine options
+  // (invite auto/queue/decline gate per inviter).
+  const groupTaskPeerTrustResolver = createPeerTrustResolver({ systemHomeDir });
   // Deliverable uploads are workspace-scoped and fail-closed: a local file
   // reaches the chain only from inside the acting Bot's profile home. Paths
   // injected into guest replies by remote members are refused here.
@@ -7906,6 +7991,22 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
   const groupTaskEngine = createGroupTaskEngine({
     verifyPin: createMetasoPinVerifier(),
     uploadDeliverableFile: gatedDeliverableUpload,
+    evaluatePeerInvitePolicy: async (inviterGlobalMetaId, guestProfile) => {
+      const profileRecord = await getMetabotProfile(systemHomeDir, guestProfile.slug).catch(() => null);
+      const profileConfig = await createConfigStore(guestProfile.homeDir).read().catch(() => null);
+      const evaluation = await evaluatePeerPolicy({
+        peerGlobalMetaId: inviterGlobalMetaId,
+        profile: {
+          allowChatSkills: profileRecord?.allowChatSkills,
+          skillClassOverrides: profileConfig?.trust.skillClassOverrides,
+          chatTrustPolicy: profileConfig?.trust.chatTrustPolicy,
+        },
+        context: 'invite',
+        systemHomeDir,
+        tierResolver: groupTaskPeerTrustResolver,
+      });
+      return { tier: evaluation.tier, acceptBehavior: evaluation.acceptBehavior };
+    },
     ctx: createGroupTaskServiceContext({
       systemHomeDir,
       createSignerForProfileHome: (profileHomeDir) => (profileHomeDir === homeDir
@@ -7913,6 +8014,7 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         : createLocalMnemonicSigner({ secretStore: createFileSecretStore(profileHomeDir), adapters, resolveSponsorWritePin })),
       adapters,
       resolvePeerChatPublicKey,
+      peerTrustTierResolver: groupTaskPeerTrustResolver,
       log: (message) => {
         console.warn(message);
         groupTaskEngineLog(message);

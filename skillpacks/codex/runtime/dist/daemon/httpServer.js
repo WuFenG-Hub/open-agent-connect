@@ -30,6 +30,10 @@ const conversations_1 = require("./routes/conversations");
 const file_1 = require("./routes/file");
 const identity_1 = require("./routes/identity");
 const user_1 = require("./routes/user");
+const owner_1 = require("./routes/owner");
+const trust_1 = require("./routes/trust");
+const block_1 = require("./routes/block");
+const team_1 = require("./routes/team");
 const network_1 = require("./routes/network");
 const provider_1 = require("./routes/provider");
 const metaapp_1 = require("./routes/metaapp");
@@ -64,6 +68,10 @@ const ROUTES = [
     file_1.handleFileRoutes,
     identity_1.handleIdentityRoutes,
     user_1.handleUserRoutes,
+    owner_1.handleOwnerRoutes,
+    trust_1.handleTrustRoutes,
+    block_1.handleBlockRoutes,
+    team_1.handleTeamRoutes,
     network_1.handleNetworkRoutes,
     provider_1.handleProviderRoutes,
     metaapp_1.handleMetaAppRoutes,

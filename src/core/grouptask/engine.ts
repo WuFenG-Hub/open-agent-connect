@@ -49,14 +49,14 @@ import {
   OPENTEAM_EXPIRY_SKEW_SECONDS,
   OPENTEAM_JOIN_CONFIRM_TIMEOUT_MS,
   OPENTEAM_PENDING_MARGIN_MS,
-  buildOpenTeamAcceptMessage,
   buildOpenTeamDeclineMessage,
   isOpenTeamEnvelopeText,
   parseOpenTeamEnvelope,
   type OpenTeamInvitePayload,
 } from './openteam';
+import { executeGuestAccept } from './openteamService';
 import type { OpenTeamMembershipRecord, OpenTeamStore } from './openteamStore';
-import { fetchGroupInfo, fetchGroupMembers, joinGroupOnChain, sendGroupMessageOnChain } from './transport';
+import { fetchGroupInfo, fetchGroupMembers, sendGroupMessageOnChain } from './transport';
 import { syncGroupMessages } from './backfill';
 import { extractDeliverablePinId, verifyTaskDeliverables } from './deliverableVerification';
 import { uploadLocalFileToChain } from '../files/uploadFile';
@@ -260,6 +260,19 @@ export interface GroupTaskEngineOptions {
    * every worker turn through the bare-LLM responder directly.
    */
   workerSessions?: boolean;
+  /**
+   * Trust-tier invite policy (trust tiers P4b): consulted after the existing
+   * validation, before any join. Resolves the INVITER's tier + accept
+   * behavior (context 'invite'); `auto` keeps the historical auto-accept,
+   * `queue` holds the invite for human approval (pending_approval), and
+   * `decline`/`ignore` record a silent decline. A throwing evaluator fails
+   * safe as `queue` (stranger). Absent = policy engine not wired — legacy
+   * auto-accept for every validated invite.
+   */
+  evaluatePeerInvitePolicy?: (
+    inviterGlobalMetaId: string,
+    guestProfile: GroupTaskProfileRef,
+  ) => Promise<{ tier: string; acceptBehavior: string }>;
 }
 
 export interface GroupTaskEngine {
@@ -2548,35 +2561,90 @@ export function createGroupTaskEngine(options: GroupTaskEngineOptions): GroupTas
       return;
     }
 
-    const signer = await ctx.signerForSlug(profile.slug);
-    const { pinId: joinedPinId } = await joinGroupOnChain(signer, payload.groupId);
-    await openteam.createGuestInvite({
-      groupId: payload.groupId,
-      inviteId: payload.inviteId,
-      inviterGlobalMetaId: payload.inviterGlobalMetaId,
-      inviterName: payload.inviterName || null,
-      taskTitle: payload.taskTitle,
-      goalSummary: payload.goalSummary || null,
-      requiredSkills: payload.requiredSkills,
-      targetGlobalMetaId: payload.targetGlobalMetaId,
-      expiresAt: payload.expiresAt,
-      status: 'accepted',
-      joinedPinId,
-    });
-    await openteam.createMembership({
-      groupId: payload.groupId,
-      slug: profile.slug,
-      inviterGlobalMetaId: payload.inviterGlobalMetaId,
-      inviterName: payload.inviterName || null,
-      taskTitle: payload.taskTitle,
-      goalSummary: payload.goalSummary || null,
-      inviteId: payload.inviteId,
-      joinedPinId,
-    });
-    await ctx.sendPrivateMessage({
-      fromSlug: profile.slug,
-      toGlobalMetaId: payload.inviterGlobalMetaId,
-      content: buildOpenTeamAcceptMessage(payload.inviteId, joinedPinId),
+    // ---- Trust-tier invite gate (trust tiers P4b): after validation, before
+    // any join. team/trusted/contact auto-accept; a stranger's invite is held
+    // as pending_approval for human approval; blocked is a silent decline.
+    let inviteTier: string | null = null;
+    if (options.evaluatePeerInvitePolicy) {
+      let inviteDecision: { tier: string; acceptBehavior: string } | null = null;
+      try {
+        inviteDecision = await options.evaluatePeerInvitePolicy(
+          payload.inviterGlobalMetaId,
+          profile,
+        );
+      } catch (error) {
+        // Fail safe: an evaluator error (e.g. chain read) holds the invite as
+        // a stranger would — pending human approval, never a crash.
+        log(`[OpenTeam] Invite policy evaluation failed for invite ${payload.inviteId}: `
+          + `${error instanceof Error ? error.message : String(error)}; holding for approval`);
+        inviteDecision = { tier: 'stranger', acceptBehavior: 'queue' };
+      }
+      inviteTier = inviteDecision?.tier ?? null;
+      const behavior = inviteDecision?.acceptBehavior ?? 'auto';
+      if (behavior === 'decline' || behavior === 'ignore') {
+        await openteam.createGuestInvite({
+          groupId: payload.groupId,
+          inviteId: payload.inviteId,
+          inviterGlobalMetaId: payload.inviterGlobalMetaId,
+          inviterName: payload.inviterName || null,
+          taskTitle: payload.taskTitle,
+          goalSummary: payload.goalSummary || null,
+          requiredSkills: payload.requiredSkills,
+          targetGlobalMetaId: payload.targetGlobalMetaId,
+          expiresAt: payload.expiresAt,
+          status: 'declined',
+          declineReason: inviteDecision?.tier === 'blocked' ? 'blocked' : 'policy_declined',
+        });
+        log(`[OpenTeam] Guest invite ${payload.inviteId} (task "${payload.taskTitle}") from `
+          + `${payload.inviterName || payload.inviterGlobalMetaId} → declined/`
+          + `${inviteDecision?.tier === 'blocked' ? 'blocked' : 'policy'} (silent, no reply)`);
+        return;
+      }
+      if (behavior === 'queue') {
+        await openteam.createGuestInvite({
+          groupId: payload.groupId,
+          inviteId: payload.inviteId,
+          inviterGlobalMetaId: payload.inviterGlobalMetaId,
+          inviterName: payload.inviterName || null,
+          taskTitle: payload.taskTitle,
+          goalSummary: payload.goalSummary || null,
+          requiredSkills: payload.requiredSkills,
+          targetGlobalMetaId: payload.targetGlobalMetaId,
+          expiresAt: payload.expiresAt,
+          status: 'pending_approval',
+        });
+        log(`[OpenTeam] Guest invite ${payload.inviteId} (task "${payload.taskTitle}") from `
+          + `${payload.inviterName || payload.inviterGlobalMetaId} held for human approval `
+          + `(tier: ${inviteDecision?.tier ?? 'unknown'})`);
+        return;
+      }
+    }
+
+    // Auto-accept through the shared accept path (also used by the human
+    // approval verb). The invite row is created as accepted when absent;
+    // team-tier auto-accepts mark the membership via 'team'.
+    await executeGuestAccept({
+      ctx,
+      profile,
+      openteam,
+      invite: {
+        id: 0,
+        groupId: payload.groupId,
+        inviteId: payload.inviteId,
+        inviterGlobalMetaId: payload.inviterGlobalMetaId,
+        inviterName: payload.inviterName || null,
+        taskTitle: payload.taskTitle,
+        goalSummary: payload.goalSummary || null,
+        requiredSkills: payload.requiredSkills,
+        targetGlobalMetaId: payload.targetGlobalMetaId,
+        expiresAt: payload.expiresAt,
+        status: 'pending_approval',
+        declineReason: null,
+        joinedPinId: null,
+        createdAt: now(),
+        respondedAt: null,
+      },
+      via: inviteTier === 'team' ? 'team' : 'openteam',
     });
   }
 
@@ -2698,6 +2766,7 @@ export function createGroupTaskEngine(options: GroupTaskEngineOptions): GroupTas
           role: 'worker',
           joinedPinId: invite.joinedPinId,
           displayName: invite.inviteeName,
+          via: invite.via ?? 'openteam',
         });
         const skills = invite.requiredSkills.length > 0
           ? ` Invited for: ${invite.requiredSkills.join(', ')}.`

@@ -22,6 +22,7 @@ const app_13 = require("../../ui/pages/schedule/app");
 const app_14 = require("../../ui/pages/tracking/app");
 const app_15 = require("../../ui/pages/services/app");
 const app_16 = require("../../ui/pages/settings/app");
+const app_17 = require("../../ui/pages/team/app");
 const browser_1 = require("@openagentinternet/agent-browser-ui/browser");
 const page_1 = require("../../browser/page");
 const i18n_1 = require("../../ui/i18n");
@@ -57,6 +58,7 @@ const PAGE_BUILDERS = {
     'memory': app_12.buildMemoryPageDefinition,
     'schedule': app_13.buildSchedulePageDefinition,
     'tracking': app_14.buildTrackingPageDefinition,
+    'team': app_17.buildTeamPageDefinition,
     'settings': app_16.buildSettingsPageDefinition,
     'metaapps': app_9.buildMetaAppsPageDefinition,
 };
@@ -64,6 +66,7 @@ const NAV_ITEMS = [
     { page: 'bot', labelKey: 'nav.botPage' },
     { page: 'conversations', labelKey: 'nav.conversations' },
     { page: 'apps', labelKey: 'nav.apps' },
+    { page: 'team', labelKey: 'nav.team' },
 ];
 // Temporarily hidden console pages: they stay registered in PAGE_BUILDERS
 // (and their tests keep covering the page scripts) but return 404 at their

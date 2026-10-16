@@ -145,7 +145,7 @@ test('settings user section invites action when no identity exists, then creates
   await waitForMicrotasks();
 
   const live = h.elements['[data-user-live]'];
-  assert.match(live.innerHTML, /No owner identity on this machine yet/);
+  assert.match(live.innerHTML, /No device identity on this machine yet/);
 
   // Create with a display name.
   live.querySelector('[data-user-create-name]').value = 'Alice';
@@ -219,7 +219,7 @@ test('settings user section guards the reveal, rename, and delete actions', asyn
   assert.match(live.innerHTML, /Click again to confirm/);
   live.querySelector('[data-user-delete-confirm]').listener('click')();
   await waitForMicrotasks();
-  assert.match(live.innerHTML, /No owner identity on this machine yet/);
+  assert.match(live.innerHTML, /No device identity on this machine yet/);
 });
 
 test('settings user section surfaces server errors with a fix hint', async () => {

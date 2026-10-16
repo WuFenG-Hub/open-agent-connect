@@ -109,6 +109,25 @@ export interface CliDependencies {
     /** Advance the zero-touch onboarding pipeline in the daemon (idempotent). */
     runOnboarding?: () => Awaitable<MetabotCommandResult<unknown>>;
   };
+  owner?: {
+    /** Sign + publish the device→owner /info/owner binding pin (daemon-backed). */
+    bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;
+  };
+  trust?: {
+    /** Resolve the local owner's effective trust set from chain (grants minus revokes). */
+    list?: () => Awaitable<MetabotCommandResult<unknown>>;
+    /** Publish one /protocols/simpletrust grant pin from the root owner. */
+    grant?: (input: { trustedOwner: string; note?: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Publish revoke pin(s) for an owner GlobalMetaID or grant pinId. */
+    revoke?: (input: { target: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
+  team?: {
+    /** Remote team Bot registry: local profiles + manual/auto registry entries. */
+    list?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Verify same root owner on-chain, then record the remote Bot. */
+    add?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    remove?: (input: { globalMetaId: string }) => Awaitable<MetabotCommandResult<unknown>>;
+  };
   network?: {
     listServices?: (input: { online?: boolean; query?: string; cached?: boolean }) => Awaitable<MetabotCommandResult<unknown>>;
     listBots?: (input: { online?: boolean; limit?: number }) => Awaitable<MetabotCommandResult<unknown>>;
@@ -200,6 +219,12 @@ export interface CliDependencies {
     setArchived?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     invite?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     invites?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Guest-side pending invites across profiles (trust tiers P4b). */
+    invitesPending?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Approve a pending guest invite (join + ACCEPT + mark inviter contact). */
+    invitesApprove?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Decline a pending guest invite and notify the inviter. */
+    invitesDecline?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     collabs?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     collabMessages?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     health?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;

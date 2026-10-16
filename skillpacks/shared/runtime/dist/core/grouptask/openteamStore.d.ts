@@ -17,9 +17,11 @@
  */
 import type { MetabotPaths } from '../state/paths';
 export type OpenTeamInviteStatus = 'pending' | 'accepted' | 'declined' | 'expired';
-export type OpenTeamGuestInviteStatus = 'invited' | 'accepted' | 'declined' | 'skipped' | 'expired';
+export type OpenTeamGuestInviteStatus = 'invited' | 'accepted' | 'declined' | 'skipped' | 'expired' | 'pending_approval';
 export type OpenTeamMembershipStatus = 'active' | 'left';
 export type OpenTeamLeftCause = 'kick' | 'self_check' | 'opt_out';
+/** How a remote membership came to be: plain OpenTeam guest, or team seating. */
+export type OpenTeamMemberVia = 'openteam' | 'team';
 export interface OpenTeamInviteRecord {
     id: number;
     taskId: number;
@@ -41,6 +43,8 @@ export interface OpenTeamInviteRecord {
     respondedAt: number | null;
     /** Set once the remote member row was added to the task (join confirmed). */
     memberAddedAt: number | null;
+    /** 'team' when seated as a verified team Bot from task creation (P4b). */
+    via?: OpenTeamMemberVia | null;
 }
 export interface OpenTeamGuestInviteRecord {
     id: number;
@@ -79,6 +83,8 @@ export interface OpenTeamMembershipRecord {
     leftAt: number | null;
     leftCause: OpenTeamLeftCause | null;
     leftReason: string | null;
+    /** 'team' when the guest auto-accepted at team tier (P4b); null for legacy rows. */
+    via?: OpenTeamMemberVia | null;
 }
 export interface OpenTeamStateFile {
     seq: number;
@@ -96,6 +102,8 @@ export interface CreateOpenTeamInviteInput {
     requiredSkills?: string[];
     sentPinId?: string | null;
     expiresAt: number;
+    /** 'team' for team-seated remote workers (P4b); default null (plain guest). */
+    via?: OpenTeamMemberVia | null;
 }
 export interface CreateOpenTeamGuestInviteInput {
     groupId: string;
@@ -120,6 +128,7 @@ export interface CreateOpenTeamMembershipInput {
     goalSummary?: string | null;
     inviteId: string;
     joinedPinId?: string | null;
+    via?: OpenTeamMemberVia | null;
 }
 export interface OpenTeamStore {
     readonly root: string;

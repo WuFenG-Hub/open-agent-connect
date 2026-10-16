@@ -56,7 +56,7 @@ task on a machine — the prerequisites (a twin Bot, an owner identity
 
 | Verb | Purpose | Key flags |
 |---|---|---|
-| `grouptask create` | create on-chain group + members + kickoff | `--title`, `--goal`, `--acceptance`, `--workers <slug,slug>`, `--chair` |
+| `grouptask create` | create on-chain group + members + kickoff | `--title`, `--goal`, `--acceptance`, `--workers <slug,slug\|gmid,gmid>`, `--chair` |
 | `grouptask list` | tasks across local chair Bots | `--tab active\|done\|cancelled\|all`, `--include-archived` |
 | `grouptask detail` | members, deliverables, checkpoints | `--chair`, `--task`, `--view summary\|full` |
 | `grouptask messages` | decrypted group transcript | `--chair`, `--task`, `--limit`, `--before-index` |
@@ -84,6 +84,32 @@ For "开一个群任务…" requests from chat:
    invites expire ~10 minutes after send, daemon must be alive), then
    `grouptask invites` to track them. `staffing search --seat <role>` (or
    `--query`) finds candidates across local workers and online Bots.
+
+## Trust Tiers and Remote Workers (trust tiers)
+
+Worker references in `--workers` may be local profile slugs OR remote team
+Bot GlobalMetaIDs. A gmid reference is accepted only when the peer resolves
+to the `team` trust tier — i.e. its `/info/owner` chain and yours terminate
+at the SAME root owner (Bots on your other devices) — otherwise creation
+fails with `worker_not_team`. Team seats are recorded `via: 'team'` and are
+first-class members of the trusted sender set.
+
+Remote peers join through the OpenTeam private-message handshake, now gated
+by the inviter's trust tier:
+
+- `team` / `trusted` / `contact` inviters → the guest Bot auto-accepts
+  (signs the group join, replies ACCEPT), unchanged from before.
+- `stranger` inviters → the invite is held as `pending_approval` on the
+  guest: no join, no reply. The human reviews it with
+  `grouptask invites list` and runs `grouptask invites approve <inviteId>`
+  (joins, replies ACCEPT, and records the inviter as a contact) or
+  `grouptask invites decline <inviteId> [--reason ...]`.
+- `blocked` inviters → silently declined (no reply).
+
+Team Bots from your other devices are proposed automatically: the team
+registry (`metabot team list|add|remove`) is populated by `team add` and
+auto-recorded whenever a peer resolves to the team tier, and the staffing
+flow seats verified registry members as remote candidates.
 
 ## Posting Rules
 

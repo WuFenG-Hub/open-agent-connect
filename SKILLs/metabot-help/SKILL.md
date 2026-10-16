@@ -65,6 +65,10 @@ CLI help:
 {{METABOT_CLI}} simplenote --help
 {{METABOT_CLI}} grouptask --help
 {{METABOT_CLI}} twin --help
+{{METABOT_CLI}} owner --help
+{{METABOT_CLI}} trust --help
+{{METABOT_CLI}} block --help
+{{METABOT_CLI}} team --help
 ```
 
 If one help command is unavailable in an older install, continue with the skill

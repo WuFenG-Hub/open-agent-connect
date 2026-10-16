@@ -78,6 +78,12 @@ export interface GroupTaskServiceContext {
     verifyPin?: PinVerifier;
     transport?: GroupTaskTransportOptions;
     log?(message: string): void;
+    /**
+     * Trust-tier resolver seam (trust tiers P4b): required for seating REMOTE
+     * team workers by GlobalMetaID in createGroupTask. Absent = any gmid worker
+     * reference fails with a clear error (fail closed).
+     */
+    resolvePeerTrustTier?: (globalMetaId: string) => Promise<import('../trust/capabilityClasses').PeerTrustTier>;
 }
 export declare class GroupTaskServiceError extends Error {
     readonly code: string;
@@ -164,6 +170,8 @@ export interface GroupTaskSummaryWithChair extends GroupTaskSummary {
 }
 /** Aggregate task summaries across every local profile's grouptask store. */
 export declare function listGroupTaskSummaries(ctx: GroupTaskServiceContext, options?: ListGroupTasksOptions): Promise<GroupTaskSummaryWithChair[]>;
+/** Trusted identity set for suspect marking: active members + the owner. */
+export declare function buildTrustedGmidSet(ctx: GroupTaskServiceContext, members: GroupTaskMember[]): Promise<Set<string>>;
 /** Best-effort transcript sync (chain history is truth; failures degrade). */
 export declare function syncGroupTaskMessages(ctx: GroupTaskServiceContext, store: GroupTaskStore, task: GroupTaskRecord): Promise<void>;
 export declare function getGroupTaskDetail(ctx: GroupTaskServiceContext, chairSlug: string, taskId: number, opts?: {

@@ -7,6 +7,7 @@ import type { PrivateChatPendingGuidanceClaim, PrivateChatStateStore } from './p
 import type { ChatStrategyStore } from './chatStrategyStore';
 import type { MetabotPaths } from '../state/paths';
 import type { Signer } from '../signing/signer';
+import type { PeerPolicyEvaluation } from '../trust/trustPolicy';
 import type { PrivateChatInboundMessage, PrivateChatMessage, ChatReplyRunner, PrivateChatAutoReplyConfig } from './privateChatTypes';
 export declare const DEFAULT_MAX_TURNS = 50;
 export interface PrivateChatAutoReplyDependencies {
@@ -23,6 +24,15 @@ export interface PrivateChatAutoReplyDependencies {
     chatSkillWaitNotice?: ChatSkillWaitNoticeGenerator | null;
     wakeStore?: PrivateChatWakeStore;
     episodeSummaryGenerator?: ChatEpisodeSummaryGenerator | null;
+    /**
+     * Trust-tier policy evaluation for peer-initiated turns (trust tiers P4a):
+     * resolves the sender's tier + accept behavior + class-filtered skill set
+     * BEFORE the auto-reply turn. Absent = policy engine not wired — legacy
+     * behavior (auto-reply with the full allowChatSkills scope). The
+     * orchestrator fails safe on a throwing evaluator: stranger tier, auto
+     * reply, NO skills, and a `trust_policy_failed` send-failure event.
+     */
+    evaluatePeerTrustPolicy?: (peerGlobalMetaId: string) => Promise<PeerPolicyEvaluation>;
     now?: () => number;
 }
 export interface PrivateChatAutoReplyOrchestrator {
@@ -34,6 +44,11 @@ export interface PrivateChatAutoReplyOrchestrator {
      * conversation tail to handled, so neither the sweep nor the
      * unanswered-tail recovery re-drives it. Returns false when the message was
      * already recorded (duplicate delivery).
+     *
+     * Trust tiers P4a: relayed profiles delegate judgment to the bound
+     * assistant (its own model decides how to answer), so the local trust-tier
+     * policy gate does NOT apply on this path — the policy gates the local
+     * auto-reply path (handleInboundMessage) only.
      */
     recordExternallyRelayedInbound(message: PrivateChatInboundMessage, relay: string): Promise<boolean>;
     retryPendingInboundMessage(peerGlobalMetaId: string): Promise<boolean>;

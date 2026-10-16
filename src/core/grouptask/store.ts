@@ -81,6 +81,7 @@ export interface AddGroupTaskMemberInput {
   joinedPinId?: string | null;
   displayName?: string | null;
   seatRole?: string | null;
+  via?: 'openteam' | 'team' | null;
 }
 
 export interface MarkGroupTaskMemberRemovedInput {
@@ -640,6 +641,7 @@ export function createGroupTaskStore(paths: MetabotPaths): GroupTaskStore {
         createdAt: Date.now(),
         displayName: input.displayName?.trim() || null,
         seatRole: input.seatRole?.trim() || null,
+        via: input.via ?? null,
         removedAt: null,
         removePinId: null,
         status: 'assigned',

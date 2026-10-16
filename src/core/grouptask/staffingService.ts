@@ -42,6 +42,8 @@ import {
   GroupTaskServiceError,
   type GroupTaskServiceContext,
 } from './service';
+import { resolveMetabotPaths } from '../state/paths';
+import { listTeamRegistryGmids } from '../trust/teamRegistryStore';
 
 export interface ProposeStaffingInput {
   chairSlug?: string;
@@ -264,11 +266,39 @@ export async function createGroupTaskFromProposal(
           : seat.role;
       }
     }
+    // Trust tiers P4b: team-registry Bots are remote-seating candidates too.
+    // Only verified team-tier gmids are passed through (createGroupTask fails
+    // closed on anything else); stale entries are skipped with a log line.
+    const localSeats = localSeatSlugs(plan);
+    const workerRefs = [...localSeats];
+    try {
+      const chairProfile = await requireProfile(ctx, gate.proposal.chairSlug);
+      const systemHomeDir = resolveMetabotPaths(chairProfile.homeDir).systemHomeDir;
+      const registryGmids = await listTeamRegistryGmids(systemHomeDir);
+      const remoteSeatGmids = new Set(
+        remoteSeats(plan)
+          .map((seat) => (seat.candidateGlobalMetaId ?? '').trim().toLowerCase())
+          .filter(Boolean),
+      );
+      for (const gmid of registryGmids) {
+        if (workerRefs.some((ref) => ref.toLowerCase() === gmid) || remoteSeatGmids.has(gmid)) continue;
+        if (!ctx.resolvePeerTrustTier) break;
+        const tier = await ctx.resolvePeerTrustTier(gmid).catch(() => null);
+        if (tier !== 'team') {
+          ctx.log?.(`[Staffing] Team-registry candidate ${gmid} skipped (tier: ${tier ?? 'unresolvable'}).`);
+          continue;
+        }
+        workerRefs.push(gmid);
+      }
+    } catch {
+      // Registry candidates are additive; a broken registry never blocks
+      // staffing creation.
+    }
     const created = await createGroupTask(ctx, {
       title: gate.proposal.title,
       goal: gate.proposal.goal,
       acceptanceCriteria: gate.proposal.acceptanceCriteria,
-      workerSlugs: localSeatSlugs(plan),
+      workerSlugs: workerRefs,
       seatRoles: Object.keys(seatRoles).length > 0 ? seatRoles : null,
       chairSlug: gate.proposal.chairSlug,
       createdBy: 'twinbot',

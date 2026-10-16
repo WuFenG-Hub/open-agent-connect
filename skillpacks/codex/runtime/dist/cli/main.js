@@ -16,6 +16,10 @@ const daemon_2 = require("./commands/daemon");
 const doctor_1 = require("./commands/doctor");
 const identity_1 = require("./commands/identity");
 const user_1 = require("./commands/user");
+const owner_1 = require("./commands/owner");
+const trust_1 = require("./commands/trust");
+const block_1 = require("./commands/block");
+const team_1 = require("./commands/team");
 const network_1 = require("./commands/network");
 const provider_1 = require("./commands/provider");
 const services_1 = require("./commands/services");
@@ -129,6 +133,18 @@ async function runCli(argv, cliContext = {}) {
                     break;
                 case 'user':
                     result = await (0, user_1.runUserCommand)(rest, context);
+                    break;
+                case 'owner':
+                    result = await (0, owner_1.runOwnerCommand)(rest, context);
+                    break;
+                case 'trust':
+                    result = await (0, trust_1.runTrustCommand)(rest, context);
+                    break;
+                case 'block':
+                    result = await (0, block_1.runBlockCommand)(rest, context);
+                    break;
+                case 'team':
+                    result = await (0, team_1.runTeamCommand)(rest, context);
                     break;
                 case 'network':
                     result = await (0, network_1.runNetworkCommand)(rest, context);

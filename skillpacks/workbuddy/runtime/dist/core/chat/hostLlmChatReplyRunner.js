@@ -590,7 +590,9 @@ function createHostLlmChatReplyRunner(options) {
         let allowedSkillScope = (0, privateChatAllowedSkills_1.emptyPrivateChatAllowedSkillScope)();
         if (allowedChatSkillsResolver) {
             try {
-                allowedSkillScope = await allowedChatSkillsResolver();
+                // Trust-tier policy filter (P4a): intersects the resolved skill scope
+                // with what the peer's tier allows; absent = legacy full scope.
+                allowedSkillScope = await allowedChatSkillsResolver(input.trustPolicyAllowedSkills ?? null);
             }
             catch (error) {
                 const message = error instanceof Error ? error.message : String(error);

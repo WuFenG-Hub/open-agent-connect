@@ -189,6 +189,9 @@ export interface GroupTaskMember {
   displayName: string | null;
   /** Staffing slate seat role (e.g. "content", "domain:legal"); null for direct-created seats. */
   seatRole?: string | null;
+  /** 'team' for remote members seated as verified team Bots (P4b); 'openteam'
+   * for plain guest joins; absent for local rows. */
+  via?: 'openteam' | 'team' | null;
   /** Set when the member was kicked; active members have null. */
   removedAt: number | null;
   /** On-chain /protocols/simplegroupremoveuser pin of the removal. */
@@ -454,7 +457,12 @@ export interface CreateGroupTaskInput {
   title: string;
   goal: string;
   acceptanceCriteria?: string | null;
-  /** Worker profile slugs; the chair is added automatically. */
+  /**
+   * Worker references: local profile slugs, and/or remote team Bot
+   * GlobalMetaIDs (trust tiers P4b — a gmid reference is accepted only when
+   * the peer resolves to the 'team' tier, else creation fails with
+   * worker_not_team). The chair is added automatically.
+   */
   workerSlugs?: string[];
   /** Optional seat role per worker slug (staffing slate); rendered into the chair/worker roster profiles. */
   seatRoles?: Record<string, string> | null;

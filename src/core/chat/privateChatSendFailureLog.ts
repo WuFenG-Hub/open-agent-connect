@@ -26,7 +26,11 @@ export type PrivateChatSendFailureKind =
   // it verbatim-echoed the last delivered replies, or a turn never produced
   // final reply text even after all bounded host retries.
   | 'echo_guard_blocked'
-  | 'reply_empty_after_retries';
+  | 'reply_empty_after_retries'
+  // Trust-tier policy (P4a): the per-peer policy evaluation itself failed
+  // (e.g. a chain read error). The turn fails safe as a stranger with no
+  // skills; the event makes the degraded decision diagnosable.
+  | 'trust_policy_failed';
 
 export interface PrivateChatSendFailureEvent {
   kind: PrivateChatSendFailureKind;

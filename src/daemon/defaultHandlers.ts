@@ -221,6 +221,14 @@ import { createMetaTaskDaemonHandlers } from './metataskHandlers';
 import { createMetasoPinVerifier } from '../core/grouptask/deliverableVerification';
 import { createScheduleDaemonHandlers } from './scheduleHandlers';
 import { createUserDaemonHandlers } from './userHandlers';
+import { createOwnerDaemonHandlers } from './ownerHandlers';
+import { createTrustDaemonHandlers } from './trustHandlers';
+import { createBlockDaemonHandlers } from './blockHandlers';
+import { createTeamDaemonHandlers } from './teamHandlers';
+import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
+import { createRootOwnerResolver } from '../core/trust/rootOwnerResolver';
+import { evaluatePeerPolicy } from '../core/trust/trustPolicy';
+import { loadRootOwnerIdentity } from '../core/owner/rootOwnerIdentity';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -5647,6 +5655,14 @@ export function createDefaultMetabotDaemonHandlers(input: {
     ?? ((globalMetaId: string) => fetchPeerChatPublicKey(globalMetaId, {
       chainApiBaseUrl: input.chainApiBaseUrl,
     }));
+  // Shared peer trust-tier resolver (trust tiers P3): the pure decision
+  // layer's tier cache is dropped whenever grants/blocks change (see the
+  // trust/block handler groups below), so tier evaluations never serve stale
+  // trust configuration. P4 wires the resolver itself into the chat/invite
+  // enforcement points.
+  const peerTrustTierResolver = createPeerTrustResolver({
+    systemHomeDir: normalizedSystemHomeDir,
+  });
   const callerReplyWaiter = input.callerReplyWaiter ?? createSocketIoMetaWebReplyWaiter({
     resolveSocketEndpoints: async () => [(await resolveInfrastructure()).socket],
   });
@@ -7161,6 +7177,28 @@ export function createDefaultMetabotDaemonHandlers(input: {
         runtimeStateStore: profileRuntimeStateStore,
         sessionStateStore: profileSessionStateStore,
       }),
+      // Trust-tier policy at private-chat ingress (P4a): tier + accept
+      // behavior + class-filtered skill set, resolved per sender before the
+      // auto-reply turn. The orchestrator fails safe on errors. The Grok
+      // webhook relay path never reaches this — relayed profiles delegate
+      // judgment to the bound assistant (see the runtime dispatcher).
+      evaluatePeerTrustPolicy: async (senderGlobalMetaId) => {
+        const profileRecord = await getMetabotProfile(normalizedSystemHomeDir, profileMetaBotSlug)
+          .catch(() => null);
+        const profileConfig = await createConfigStore(profileHomeDir).read().catch(() => null);
+        return evaluatePeerPolicy({
+          peerGlobalMetaId: senderGlobalMetaId,
+          profile: {
+            allowChatSkills: profileRecord?.allowChatSkills,
+            skillClassOverrides: profileConfig?.trust.skillClassOverrides,
+            chatTrustPolicy: profileConfig?.trust.chatTrustPolicy,
+          },
+          profileHomeDir: profileHomeDir,
+          context: 'chat',
+          systemHomeDir: normalizedSystemHomeDir,
+          tierResolver: peerTrustTierResolver,
+        });
+      },
     }, profileAutoReplyConfig);
 
     // Accept-and-poll: a guided turn can take minutes (LLM + possible skill
@@ -15034,6 +15072,53 @@ export function createDefaultMetabotDaemonHandlers(input: {
       trafficAccountService,
       ownerOnboardingRunner,
     }),
+    // Root Owner Identity (trust tiers P1): the `metabot owner *` CLI surface
+    // over HTTP. bindDevice reuses the same adapters + traffic sponsor hook as
+    // user update so the device→owner /info/owner pin bills exactly like the
+    // owner /info/name pin (traffic-sponsored first, subsidy self-pay fallback).
+    owner: createOwnerDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      adapters,
+      resolveSponsorWritePin,
+      // Binding state for the Settings Root Owner section (P6): one verified
+      // hop from the device identity — the chain's first link must name the
+      // root owner. Served from the tier resolver's cache.
+      deviceBindingStatus: async () => {
+        try {
+          const device = await readOwnerIdentity(normalizedSystemHomeDir);
+          if (!device) return 'unknown';
+          const rootOwner = await loadRootOwnerIdentity(normalizedSystemHomeDir);
+          if (!rootOwner) return 'unbound';
+          const resolution = await createRootOwnerResolver({
+            systemHomeDir: normalizedSystemHomeDir,
+          }).resolveDeviceOwner(device.globalMetaId);
+          const boundTo = resolution.chain.length > 0 ? resolution.chain[0].ownerGmid : null;
+          return boundTo === rootOwner.globalMetaId ? 'bound' : 'unbound';
+        } catch {
+          return 'unknown';
+        }
+      },
+    }),
+    // On-chain trust grants + device blocklist (trust tiers P2). grant/revoke
+    // reuse the owner signer + traffic sponsor hook; block is pure local state
+    // whose add/remove drops the peer's cached trust resolution.
+    trust: createTrustDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      adapters,
+      resolveSponsorWritePin,
+      onTrustConfigChanged: () => peerTrustTierResolver.invalidate(),
+    }),
+    block: createBlockDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      onTrustConfigChanged: () => peerTrustTierResolver.invalidate(),
+    }),
+    // Remote team Bot registry (trust tiers P5): add verifies the peer's root
+    // owner against mine on-chain before recording (team_not_same_owner when
+    // they differ).
+    team: createTeamDaemonHandlers({
+      systemHomeDir: normalizedSystemHomeDir,
+      rootOwnerResolver: createRootOwnerResolver({ systemHomeDir: normalizedSystemHomeDir }),
+    }),
     network: {
       listServices: async ({ online, query, cached }) => {
         const state = await runtimeStateStore.readState();
@@ -17585,6 +17670,7 @@ export function createDefaultMetabotDaemonHandlers(input: {
       resolveSponsorWritePin,
       resolvePeerChatPublicKey,
       verifyPin: createMetasoPinVerifier(),
+      peerTrustTierResolver,
       log: (message) => console.warn(message),
     }),
     metatask: createMetaTaskDaemonHandlers({
