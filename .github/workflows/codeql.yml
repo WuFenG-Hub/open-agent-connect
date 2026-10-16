@@ -24,6 +24,7 @@ jobs:
       - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
+          config: .github/codeql-config.yml
 
       - uses: actions/setup-node@v7
         with:
