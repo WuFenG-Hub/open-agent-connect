@@ -4,7 +4,7 @@ import type { BrowserHttpHandlers } from '../../browser/http';
 import type { MetabotCommandResult } from '../../core/contracts/commandResult';
 import type { MetaAppStageEvent } from '../../core/metaapp/stageEvents';
 export type Awaitable<T> = T | Promise<T>;
-export type MetabotUiPageName = 'hub' | 'publish' | 'my-services' | 'trace' | 'refund' | 'bot' | 'conversations' | 'services' | 'apps' | 'settings' | 'kb' | 'surf' | 'memory' | 'schedule' | 'tracking' | 'traffic' | 'dream' | 'metaapps' | 'browser';
+export type MetabotUiPageName = 'hub' | 'publish' | 'my-services' | 'trace' | 'refund' | 'bot' | 'conversations' | 'services' | 'apps' | 'settings' | 'team' | 'kb' | 'surf' | 'memory' | 'schedule' | 'tracking' | 'traffic' | 'dream' | 'metaapps' | 'browser';
 export interface ServiceRefundSyncResponse {
     scanned: {
         requestPins: number;
@@ -190,6 +190,8 @@ export interface MetabotDaemonHttpHandlers {
         rename?: (input: {
             name: string;
         }) => Awaitable<MetabotCommandResult<unknown>>;
+        /** Reveal the stored root owner mnemonic (backup view; guarded like user reveal). */
+        reveal?: () => Awaitable<MetabotCommandResult<unknown>>;
         /** Sign (root owner key) + publish (device identity) the /info/owner
          *  device->owner binding pin. */
         bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;

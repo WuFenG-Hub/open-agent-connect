@@ -15,6 +15,7 @@ const SUPPORTED_UI_PAGES = new Set([
     'traffic',
     'dream',
     'settings',
+    'team',
     'buzz',
     'chat',
     'publish',

@@ -23,5 +23,11 @@ export interface OwnerDaemonHandlersInput {
     createSigner?: (identity: OwnerIdentityRecord) => Signer;
     /** Subsidy seam for `bindDevice`; defaults to the real MVC gas subsidy service. */
     requestSubsidy?: (options: RequestMvcGasSubsidyOptions) => Promise<RequestMvcGasSubsidyResult>;
+    /**
+     * Device→owner binding state for the `who` read (trust tiers UI): 'bound'
+     * when the device identity's /info/owner pin names the root owner,
+     * 'unbound' when it does not, 'unknown' when it cannot be read.
+     */
+    deviceBindingStatus?: () => Promise<'bound' | 'unbound' | 'unknown'>;
 }
 export declare function createOwnerDaemonHandlers(input: OwnerDaemonHandlersInput): NonNullable<MetabotDaemonHttpHandlers['owner']>;

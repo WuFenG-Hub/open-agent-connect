@@ -4375,10 +4375,10 @@ const COMMAND_HELP_SPECS = [
     },
     {
         commandPath: ['ui', 'open'],
-        summary: 'Open one local MetaBot runtime HTML page such as bot, conversations, services, apps, settings, hub, buzz, chat, publish, my-services, trace, refund, kb, surf, memory, dream, schedule, or traffic.',
+        summary: 'Open one local MetaBot runtime HTML page such as bot, conversations, services, apps, settings, team, hub, buzz, chat, publish, my-services, trace, refund, kb, surf, memory, dream, schedule, or traffic.',
         usage: 'metabot ui open --page <page> [--from <bot-slug>] [--trace-id <trace-id>] [--session-id <session-id>] [--service-id <service-pin-id>] [--mode <mode>] [--host <provider>]',
         requiredFlags: [
-            { flag: '--page', value: '<page>', description: 'Built-in page name: bot, conversations, services, apps, settings, hub, buzz, chat, publish, my-services, trace, refund, kb, surf, memory, dream, or traffic.' },
+            { flag: '--page', value: '<page>', description: 'Built-in page name: bot, conversations, services, apps, settings, team, hub, buzz, chat, publish, my-services, trace, refund, kb, surf, memory, dream, or traffic.' },
         ],
         optionalFlags: [
             FROM_BOT_FLAG,

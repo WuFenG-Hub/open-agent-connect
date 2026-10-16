@@ -26,6 +26,7 @@ import {
   importRootOwnerIdentity,
   loadRootOwnerIdentity,
   renameRootOwnerIdentity,
+  revealRootOwnerMnemonic,
   RootOwnerIdentityError,
   toRootOwnerIdentityPublic,
 } from '../core/owner/rootOwnerIdentity';
@@ -46,6 +47,12 @@ export interface OwnerDaemonHandlersInput {
   createSigner?: (identity: OwnerIdentityRecord) => Signer;
   /** Subsidy seam for `bindDevice`; defaults to the real MVC gas subsidy service. */
   requestSubsidy?: (options: RequestMvcGasSubsidyOptions) => Promise<RequestMvcGasSubsidyResult>;
+  /**
+   * Device→owner binding state for the `who` read (trust tiers UI): 'bound'
+   * when the device identity's /info/owner pin names the root owner,
+   * 'unbound' when it does not, 'unknown' when it cannot be read.
+   */
+  deviceBindingStatus?: () => Promise<'bound' | 'unbound' | 'unknown'>;
 }
 
 function rootOwnerFailure(error: unknown): MetabotCommandResult<never> {
@@ -66,7 +73,14 @@ export function createOwnerDaemonHandlers(
   return {
     who: async () => {
       const record = await loadRootOwnerIdentity(systemHomeDir);
-      return commandSuccess({ identity: record ? toRootOwnerIdentityPublic(record) : null });
+      let deviceBinding: 'bound' | 'unbound' | 'unknown' | null = null;
+      if (record && input.deviceBindingStatus) {
+        deviceBinding = await input.deviceBindingStatus().catch(() => 'unknown' as const);
+      }
+      return commandSuccess({
+        identity: record ? toRootOwnerIdentityPublic(record) : null,
+        ...(deviceBinding ? { deviceBinding } : {}),
+      });
     },
 
     create: async (rawInput) => {
@@ -105,6 +119,15 @@ export function createOwnerDaemonHandlers(
       try {
         const record = await renameRootOwnerIdentity(systemHomeDir, name);
         return commandSuccess({ identity: toRootOwnerIdentityPublic(record) });
+      } catch (error) {
+        return rootOwnerFailure(error);
+      }
+    },
+
+    reveal: async () => {
+      try {
+        const mnemonic = await revealRootOwnerMnemonic(systemHomeDir);
+        return commandSuccess({ mnemonic });
       } catch (error) {
         return rootOwnerFailure(error);
       }

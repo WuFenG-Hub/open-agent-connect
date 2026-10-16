@@ -57,7 +57,16 @@ peers (`source: 'manual'|'auto'` registry entries); CLI naming settled (OQ2:
 `user` = device identity, `owner` = the human's portable identity; OQ4
 resolved — TTL + event-driven invalidation + fresh block reads is the
 designed behavior); SKILL updates (grouptask / chat-privatechat /
-identity-manage / help) and Settings copy synced en+zh. Feature complete.
+identity-manage / help) and Settings copy synced en+zh.
+**(updated 2026-10-16): P6 landed (companion UI)** — the owner/trust/team
+features are operable from the local UI: a new **Team & Trust page**
+(`/ui/team`, topbar-nav registered) with Team members (verified add),
+pending-invite approval, trusted-owner grants/revokes, and the device
+blocklist; and a **Root Owner section on the Settings User tab** (status +
+device→owner binding state, create/import, bind-device behind a two-step
+confirm, guarded reveal) backed by the new `/api/owner/reveal` route and the
+`deviceBinding` field on `/api/owner/who`. Full en+zh i18n. Feature
+complete.
 
 ## Goal
 

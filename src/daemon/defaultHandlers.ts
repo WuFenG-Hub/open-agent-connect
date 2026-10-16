@@ -228,6 +228,7 @@ import { createTeamDaemonHandlers } from './teamHandlers';
 import { createPeerTrustResolver } from '../core/trust/peerTrustResolver';
 import { createRootOwnerResolver } from '../core/trust/rootOwnerResolver';
 import { evaluatePeerPolicy } from '../core/trust/trustPolicy';
+import { loadRootOwnerIdentity } from '../core/owner/rootOwnerIdentity';
 import type { ScheduleStore } from '../core/schedule/store';
 import type { LocalIdentitySecrets, SecretStore } from '../core/secrets/secretStore';
 import {
@@ -15079,6 +15080,24 @@ export function createDefaultMetabotDaemonHandlers(input: {
       systemHomeDir: normalizedSystemHomeDir,
       adapters,
       resolveSponsorWritePin,
+      // Binding state for the Settings Root Owner section (P6): one verified
+      // hop from the device identity — the chain's first link must name the
+      // root owner. Served from the tier resolver's cache.
+      deviceBindingStatus: async () => {
+        try {
+          const device = await readOwnerIdentity(normalizedSystemHomeDir);
+          if (!device) return 'unknown';
+          const rootOwner = await loadRootOwnerIdentity(normalizedSystemHomeDir);
+          if (!rootOwner) return 'unbound';
+          const resolution = await createRootOwnerResolver({
+            systemHomeDir: normalizedSystemHomeDir,
+          }).resolveDeviceOwner(device.globalMetaId);
+          const boundTo = resolution.chain.length > 0 ? resolution.chain[0].ownerGmid : null;
+          return boundTo === rootOwner.globalMetaId ? 'bound' : 'unbound';
+        } catch {
+          return 'unknown';
+        }
+      },
     }),
     // On-chain trust grants + device blocklist (trust tiers P2). grant/revoke
     // reuse the owner signer + traffic sponsor hook; block is pure local state

@@ -16,6 +16,7 @@ import { buildSchedulePageDefinition } from '../../ui/pages/schedule/app';
 import { buildTrackingPageDefinition } from '../../ui/pages/tracking/app';
 import { buildServicesPageDefinition } from '../../ui/pages/services/app';
 import { buildSettingsPageDefinition } from '../../ui/pages/settings/app';
+import { buildTeamPageDefinition } from '../../ui/pages/team/app';
 import type { LocalUiPageDefinition } from '../../ui/pages/types';
 import { normalizeBrowserTheme } from '@openagentinternet/agent-browser-ui/browser';
 import { renderBrowserPageHtml } from '../../browser/page';
@@ -58,6 +59,7 @@ const PAGE_BUILDERS: Partial<Record<MetabotUiPageName, LocalUiPageBuilder>> = {
   'memory': buildMemoryPageDefinition,
   'schedule': buildSchedulePageDefinition,
   'tracking': buildTrackingPageDefinition,
+  'team': buildTeamPageDefinition,
   'settings': buildSettingsPageDefinition,
   'metaapps': buildMetaAppsPageDefinition,
 };
@@ -66,6 +68,7 @@ const NAV_ITEMS: Array<{ page: MetabotUiPageName; labelKey: I18nKey }> = [
   { page: 'bot', labelKey: 'nav.botPage' },
   { page: 'conversations', labelKey: 'nav.conversations' },
   { page: 'apps', labelKey: 'nav.apps' },
+  { page: 'team', labelKey: 'nav.team' },
 ];
 
 // Temporarily hidden console pages: they stay registered in PAGE_BUILDERS

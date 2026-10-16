@@ -40,6 +40,13 @@ function buildSettingsPageDefinition(i18n = (0, i18n_1.createI18nContext)()) {
             </div>
             <div class="settings-user-live" data-user-live></div>
           </article>
+          <article class="settings-panel" data-owner-section>
+            <div>
+              <h2 data-i18n-key="settings.owner.title">${i18n.t('settings.owner.title')}</h2>
+              <p data-i18n-key="settings.owner.body">${i18n.t('settings.owner.body')}</p>
+            </div>
+            <div class="settings-user-live" data-owner-live></div>
+          </article>
           <article class="settings-panel" data-onboarding-section>
             <div>
               <h2 data-i18n-key="settings.onboarding.title">${i18n.t('settings.onboarding.title')}</h2>
@@ -200,6 +207,7 @@ function buildSettingsPageDefinition(i18n = (0, i18n_1.createI18nContext)()) {
   const status = document.querySelector('[data-settings-status]');
   const refresh = document.querySelector('[data-settings-refresh]');
   const userLive = document.querySelector('[data-user-live]');
+  const ownerLive = document.querySelector('[data-owner-live]');
   const onboardingLive = document.querySelector('[data-onboarding-live]');
   const tabsBar = document.querySelector('[data-settings-tabs]');
   const tabpanels = {
@@ -717,6 +725,308 @@ function buildSettingsPageDefinition(i18n = (0, i18n_1.createI18nContext)()) {
     }
   };
 
+  // ---- Root Owner card (/api/owner/*, trust tiers): the human's portable,
+  // cross-device identity, optional one-per-machine layer above the device
+  // identity. Create/import mirror the device-identity flows; bind-device
+  // publishes the on-chain /info/owner pin behind a two-step confirm.
+
+  const ownerState = {
+    loading: true,
+    identity: null,
+    deviceBinding: '',
+    busy: false,
+    message: { kind: '', text: '' },
+    newMnemonic: '',
+    newMnemonicVisible: false,
+    bindArmed: false,
+    revealArmed: false,
+    revealedMnemonic: '',
+    revealedMnemonicVisible: false,
+  };
+
+  const ownerPost = async (url, body) => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (!payload || payload.ok !== true) {
+      const error = new Error((payload && payload.message) || uiText('settings.owner.actionFailed', 'Root owner request failed.'));
+      error.code = payload && payload.code ? String(payload.code) : '';
+      throw error;
+    }
+    return payload.data || {};
+  };
+
+  const ownerFixHint = (code) => {
+    if (code === 'root_owner_exists') {
+      return uiText('settings.owner.fix.root_owner_exists', 'A root owner identity already lives on this machine; delete it first only if you really want to replace it.');
+    }
+    if (code === 'invalid_mnemonic') {
+      return uiText('settings.owner.fix.invalid_mnemonic', 'Check the word count and spelling, then try again.');
+    }
+    if (code === 'root_owner_missing') {
+      return uiText('settings.owner.fix.root_owner_missing', 'Create or import the root owner identity first.');
+    }
+    return '';
+  };
+
+  const ownerErrorText = (error) => {
+    const message = (error && error.message) || uiText('settings.owner.actionFailed', 'Root owner request failed.');
+    const hint = ownerFixHint(error && error.code);
+    return hint ? message + ' ' + hint : message;
+  };
+
+  const ownerMnemonicBanner = () => {
+    if (!ownerState.newMnemonic) return '';
+    const visible = ownerState.newMnemonicVisible === true;
+    const words = visible ? ownerState.newMnemonic : maskMnemonic(ownerState.newMnemonic);
+    return '<div class="settings-user-mnemonic">'
+      + '<p class="status-msg warning">' + escapeHtml(uiText('settings.user.mnemonicWarning', 'Back up these words now — anyone holding them controls this identity, and they will not be shown again.')) + '</p>'
+      + '<p class="mono settings-user-mnemonic-words">' + escapeHtml(words) + '</p>'
+      + '<button class="btn btn-sm" type="button" data-owner-mnemonic-toggle>' + escapeHtml(visible ? uiText('settings.user.hideMnemonic', 'Hide') : uiText('settings.user.showMnemonic', 'Show')) + '</button>'
+      + '</div>';
+  };
+
+  const renderOwner = () => {
+    if (!ownerLive) return;
+    if (ownerState.loading) {
+      ownerLive.innerHTML = '<p class="field-hint">' + escapeHtml(uiText('settings.owner.status.loading', 'Loading the root owner identity...')) + '</p>';
+      return;
+    }
+    const message = ownerState.message.text
+      ? '<p class="status-msg' + (ownerState.message.kind ? ' ' + ownerState.message.kind : '') + '" data-owner-message>' + escapeHtml(ownerState.message.text) + '</p>'
+      : '';
+    if (!ownerState.identity) {
+      const busy = ownerState.busy === true;
+      ownerLive.innerHTML = message
+        + '<div class="settings-user-empty"><strong>' + escapeHtml(uiText('settings.owner.emptyTitle', 'No root owner identity on this machine yet')) + '</strong>'
+        + '<p>' + escapeHtml(uiText('settings.owner.emptyBody', 'Create or import the Owner Identity — the human identity that follows you across devices. One per machine.')) + '</p></div>'
+        + ownerMnemonicBanner()
+        + '<form class="settings-user-create" data-owner-create-form>'
+        + '<label class="field"><span>' + escapeHtml(uiText('settings.owner.fieldName', 'Display name')) + '</span>'
+        + '<input type="text" data-owner-create-name placeholder="' + escapeHtml(uiText('settings.owner.namePlaceholder', 'e.g. Alice')) + '" /></label>'
+        + '<button class="btn btn-primary btn-sm" type="submit" data-owner-create-submit' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? uiText('settings.owner.creating', 'Creating...') : uiText('settings.owner.create', 'Create owner identity')) + '</button>'
+        + '</form>'
+        + '<form class="settings-user-import" data-owner-import-form>'
+        + '<label class="field"><span>' + escapeHtml(uiText('settings.owner.fieldMnemonic', 'Mnemonic (12 or 24 words)')) + '</span>'
+        + '<textarea rows="3" data-owner-import-mnemonic></textarea></label>'
+        + '<div class="settings-user-import-row">'
+        + '<label class="field"><span>' + escapeHtml(uiText('settings.owner.fieldPath', 'Derivation path (optional)')) + '</span>'
+        + '<input type="text" data-owner-import-path placeholder="m/44\\'/10001\\'/0\\'/0/0" /></label>'
+        + '<button class="btn btn-sm" type="submit" data-owner-import-submit' + (busy ? ' disabled' : '') + '>' + escapeHtml(busy ? uiText('settings.owner.importing', 'Importing...') : uiText('settings.owner.import', 'Import owner identity')) + '</button>'
+        + '</div></form>';
+      ownerLive.querySelector('[data-owner-create-form]').addEventListener('submit', createOwnerIdentity);
+      ownerLive.querySelector('[data-owner-import-form]').addEventListener('submit', importOwnerIdentity);
+      bindOwnerMnemonicToggle();
+      return;
+    }
+
+    const identity = ownerState.identity;
+    const busy = ownerState.busy === true;
+    const binding = ownerState.deviceBinding === 'bound'
+      ? '<p class="status-msg success">' + escapeHtml(uiText('settings.owner.bound', 'This device is bound to your owner on-chain (the on-chain /info/owner pin is in place).')) + '</p>'
+      : ownerState.deviceBinding === 'unbound'
+        ? '<p class="status-msg warning">' + escapeHtml(uiText('settings.owner.unbound', 'This device is NOT bound to your owner yet — group tasks and trust tiers across devices stay disabled until you bind.')) + '</p>'
+        : '';
+    const bindBlock = ownerState.deviceBinding === 'bound'
+      ? ''
+      : ownerState.bindArmed
+        ? '<button class="btn btn-danger btn-sm" type="button" data-owner-bind-confirm' + (busy ? ' disabled' : '') + '>' + escapeHtml(uiText('settings.owner.bindConfirm', 'Publishes an on-chain /info/owner pin from this device, signed by your owner key (network fee applies). Click again to confirm.')) + '</button>'
+        : '<button class="btn btn-primary btn-sm" type="button" data-owner-bind' + (busy ? ' disabled' : '') + '>' + escapeHtml(uiText('settings.owner.bind', 'Bind device to owner')) + '</button>';
+    const revealBlock = ownerState.revealArmed
+      ? '<button class="btn btn-danger btn-sm settings-user-reveal" type="button" data-owner-reveal-confirm' + (busy ? ' disabled' : '') + '>' + escapeHtml(uiText('settings.owner.revealConfirm', 'Click again to view — anyone with these words controls your owner identity on every device')) + '</button>'
+      : '<button class="btn btn-sm settings-user-reveal" type="button" data-owner-reveal' + (busy ? ' disabled' : '') + '>' + escapeHtml(uiText('settings.owner.reveal', 'View owner mnemonic')) + '</button>';
+    const revealed = ownerState.revealedMnemonic
+      ? '<div class="settings-user-mnemonic">'
+        + '<p class="mono settings-user-mnemonic-words">' + escapeHtml(ownerState.revealedMnemonicVisible ? ownerState.revealedMnemonic : maskMnemonic(ownerState.revealedMnemonic)) + '</p>'
+        + '<button class="btn btn-sm" type="button" data-owner-revealed-toggle>' + escapeHtml(ownerState.revealedMnemonicVisible ? uiText('settings.user.hideMnemonic', 'Hide') : uiText('settings.user.showMnemonic', 'Show')) + '</button>'
+        + '</div>'
+      : '';
+
+    ownerLive.innerHTML = message
+      + identityRows(identity)
+      + binding
+      + '<div class="settings-user-controls">'
+      + '<div class="settings-user-action-group">'
+      + '<span class="settings-user-actions-label">' + escapeHtml(uiText('settings.user.actions', 'Identity actions')) + '</span>'
+      + '<div class="settings-user-main-actions">' + bindBlock + revealBlock + '</div>'
+      + '</div>'
+      + '</div>'
+      + revealed
+      + ownerMnemonicBanner();
+
+    if (bindBlock) {
+      if (ownerState.bindArmed) {
+        ownerLive.querySelector('[data-owner-bind-confirm]').addEventListener('click', bindDeviceToOwner);
+      } else {
+        ownerLive.querySelector('[data-owner-bind]').addEventListener('click', () => {
+          ownerState.bindArmed = true;
+          ownerState.revealArmed = false;
+          renderOwner();
+        });
+      }
+    }
+    if (ownerState.revealArmed) {
+      ownerLive.querySelector('[data-owner-reveal-confirm]').addEventListener('click', revealOwnerMnemonic);
+    } else {
+      ownerLive.querySelector('[data-owner-reveal]').addEventListener('click', () => {
+        ownerState.revealArmed = true;
+        ownerState.bindArmed = false;
+        renderOwner();
+      });
+    }
+    if (ownerState.revealedMnemonic) {
+      ownerLive.querySelector('[data-owner-revealed-toggle]').addEventListener('click', () => {
+        ownerState.revealedMnemonicVisible = !ownerState.revealedMnemonicVisible;
+        renderOwner();
+      });
+    }
+    bindOwnerMnemonicToggle();
+  };
+
+  const bindOwnerMnemonicToggle = () => {
+    if (!ownerState.newMnemonic || !ownerLive) return;
+    const toggle = ownerLive.querySelector('[data-owner-mnemonic-toggle]');
+    if (toggle) {
+      toggle.addEventListener('click', () => {
+        ownerState.newMnemonicVisible = !ownerState.newMnemonicVisible;
+        renderOwner();
+      });
+    }
+  };
+
+  const loadOwner = async () => {
+    ownerState.loading = true;
+    renderOwner();
+    try {
+      const payload = await fetchJson('/api/owner/who');
+      if (!payload || payload.ok !== true) {
+        throw new Error((payload && payload.message) || uiText('settings.owner.actionFailed', 'Root owner request failed.'));
+      }
+      const data = payload.data || {};
+      ownerState.identity = data.identity || null;
+      ownerState.deviceBinding = typeof data.deviceBinding === 'string' ? data.deviceBinding : 'unknown';
+      ownerState.loading = false;
+      renderOwner();
+    } catch {
+      ownerState.loading = false;
+      ownerState.identity = null;
+      ownerState.deviceBinding = 'unknown';
+      renderOwner();
+    }
+  };
+
+  const refreshOwnerStatus = async () => {
+    try {
+      const payload = await fetchJson('/api/owner/who');
+      if (payload && payload.ok === true) {
+        const data = payload.data || {};
+        ownerState.identity = data.identity || null;
+        ownerState.deviceBinding = typeof data.deviceBinding === 'string' ? data.deviceBinding : 'unknown';
+      }
+    } catch {}
+  };
+
+  const createOwnerIdentity = async (event) => {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (ownerState.busy) return;
+    const input = ownerLive.querySelector('[data-owner-create-name]');
+    ownerState.busy = true;
+    ownerState.message = { kind: '', text: '' };
+    renderOwner();
+    try {
+      const data = await ownerPost('/api/owner/create', {
+        name: input ? String(input.value || '').trim() : '',
+      });
+      ownerState.busy = false;
+      ownerState.identity = data.identity || null;
+      ownerState.deviceBinding = typeof data.deviceBinding === 'string' ? data.deviceBinding : 'unknown';
+      ownerState.newMnemonic = typeof data.mnemonic === 'string' ? data.mnemonic : '';
+      ownerState.newMnemonicVisible = false;
+      ownerState.message = { kind: 'success', text: uiText('settings.owner.created', 'Root owner identity created. Back up the mnemonic now — it will not be shown again.') };
+      renderOwner();
+    } catch (error) {
+      ownerState.busy = false;
+      ownerState.message = { kind: 'error', text: ownerErrorText(error) };
+      renderOwner();
+    }
+  };
+
+  const importOwnerIdentity = async (event) => {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (ownerState.busy) return;
+    const mnemonicInput = ownerLive.querySelector('[data-owner-import-mnemonic]');
+    const pathInput = ownerLive.querySelector('[data-owner-import-path]');
+    const mnemonic = mnemonicInput ? String(mnemonicInput.value || '').trim() : '';
+    if (!mnemonic) {
+      ownerState.message = { kind: 'error', text: uiText('settings.owner.mnemonicRequired', 'Enter the mnemonic words to import.') };
+      renderOwner();
+      return;
+    }
+    ownerState.busy = true;
+    ownerState.message = { kind: '', text: '' };
+    renderOwner();
+    try {
+      const data = await ownerPost('/api/owner/import', {
+        mnemonic,
+        name: '',
+        ...(pathInput && String(pathInput.value || '').trim()
+          ? { path: String(pathInput.value || '').trim() }
+          : {}),
+      });
+      ownerState.busy = false;
+      ownerState.identity = data.identity || null;
+      ownerState.deviceBinding = typeof data.deviceBinding === 'string' ? data.deviceBinding : 'unknown';
+      ownerState.newMnemonic = typeof data.mnemonic === 'string' ? data.mnemonic : '';
+      ownerState.newMnemonicVisible = false;
+      ownerState.message = { kind: 'success', text: uiText('settings.owner.imported', 'Root owner identity imported.') };
+      renderOwner();
+    } catch (error) {
+      ownerState.busy = false;
+      ownerState.message = { kind: 'error', text: ownerErrorText(error) };
+      renderOwner();
+    }
+  };
+
+  const bindDeviceToOwner = async () => {
+    if (ownerState.busy) return;
+    ownerState.busy = true;
+    ownerState.bindArmed = false;
+    ownerState.message = { kind: '', text: '' };
+    renderOwner();
+    try {
+      await ownerPost('/api/owner/bind-device', {});
+      ownerState.busy = false;
+      ownerState.message = { kind: 'success', text: uiText('settings.owner.bindDone', 'Device bound to your owner on-chain.') };
+      await refreshOwnerStatus();
+      renderOwner();
+    } catch (error) {
+      ownerState.busy = false;
+      ownerState.message = { kind: 'error', text: ownerErrorText(error) };
+      renderOwner();
+    }
+  };
+
+  const revealOwnerMnemonic = async () => {
+    if (ownerState.busy) return;
+    ownerState.busy = true;
+    ownerState.revealArmed = false;
+    renderOwner();
+    try {
+      const data = await ownerPost('/api/owner/reveal', {});
+      ownerState.busy = false;
+      ownerState.revealedMnemonic = typeof data.mnemonic === 'string' ? data.mnemonic : '';
+      ownerState.revealedMnemonicVisible = false;
+      renderOwner();
+    } catch (error) {
+      ownerState.busy = false;
+      ownerState.message = { kind: 'error', text: ownerErrorText(error) };
+      renderOwner();
+    }
+  };
+
   const loadOnboarding = async () => {
     onboardingState.loading = true;
     renderOnboarding();
@@ -862,6 +1172,7 @@ function buildSettingsPageDefinition(i18n = (0, i18n_1.createI18nContext)()) {
       }
     }
     loadUser().catch(() => undefined);
+    loadOwner().catch(() => undefined);
     loadOnboarding().catch(() => undefined);
     loadInfrastructure().catch(() => undefined);
   };
@@ -870,6 +1181,7 @@ function buildSettingsPageDefinition(i18n = (0, i18n_1.createI18nContext)()) {
   window.addEventListener('oac:i18n-changed', () => {
     renderStatus();
     renderUser();
+    renderOwner();
     renderOnboarding();
     renderInfrastructure();
   });

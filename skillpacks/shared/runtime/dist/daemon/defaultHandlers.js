@@ -88,6 +88,7 @@ const teamHandlers_1 = require("./teamHandlers");
 const peerTrustResolver_1 = require("../core/trust/peerTrustResolver");
 const rootOwnerResolver_1 = require("../core/trust/rootOwnerResolver");
 const trustPolicy_1 = require("../core/trust/trustPolicy");
+const rootOwnerIdentity_1 = require("../core/owner/rootOwnerIdentity");
 const nativeWallet_1 = require("../core/wallet/nativeWallet");
 const uploadLargeFile_1 = require("../core/files/uploadLargeFile");
 const metaFsLargeUploader_1 = require("../core/files/metaFsLargeUploader");
@@ -12677,6 +12678,27 @@ function createDefaultMetabotDaemonHandlers(input) {
             systemHomeDir: normalizedSystemHomeDir,
             adapters,
             resolveSponsorWritePin,
+            // Binding state for the Settings Root Owner section (P6): one verified
+            // hop from the device identity — the chain's first link must name the
+            // root owner. Served from the tier resolver's cache.
+            deviceBindingStatus: async () => {
+                try {
+                    const device = await (0, ownerIdentity_1.readOwnerIdentity)(normalizedSystemHomeDir);
+                    if (!device)
+                        return 'unknown';
+                    const rootOwner = await (0, rootOwnerIdentity_1.loadRootOwnerIdentity)(normalizedSystemHomeDir);
+                    if (!rootOwner)
+                        return 'unbound';
+                    const resolution = await (0, rootOwnerResolver_1.createRootOwnerResolver)({
+                        systemHomeDir: normalizedSystemHomeDir,
+                    }).resolveDeviceOwner(device.globalMetaId);
+                    const boundTo = resolution.chain.length > 0 ? resolution.chain[0].ownerGmid : null;
+                    return boundTo === rootOwner.globalMetaId ? 'bound' : 'unbound';
+                }
+                catch {
+                    return 'unknown';
+                }
+            },
         }),
         // On-chain trust grants + device blocklist (trust tiers P2). grant/revoke
         // reuse the owner signer + traffic sponsor hook; block is pure local state

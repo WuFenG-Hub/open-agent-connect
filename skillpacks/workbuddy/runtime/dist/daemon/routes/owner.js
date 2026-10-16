@@ -14,6 +14,7 @@ const POST_VERBS = {
     '/api/owner/create': 'create',
     '/api/owner/import': 'import',
     '/api/owner/rename': 'rename',
+    '/api/owner/reveal': 'reveal',
     '/api/owner/bind-device': 'bindDevice',
 };
 function validateInput(verb, input) {

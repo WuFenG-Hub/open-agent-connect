@@ -17,6 +17,7 @@ export type MetabotUiPageName =
   | 'services'
   | 'apps'
   | 'settings'
+  | 'team'
   | 'kb'
   | 'surf'
   | 'memory'
@@ -186,6 +187,8 @@ export interface MetabotDaemonHttpHandlers {
     create?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     import?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     rename?: (input: { name: string }) => Awaitable<MetabotCommandResult<unknown>>;
+    /** Reveal the stored root owner mnemonic (backup view; guarded like user reveal). */
+    reveal?: () => Awaitable<MetabotCommandResult<unknown>>;
     /** Sign (root owner key) + publish (device identity) the /info/owner
      *  device->owner binding pin. */
     bindDevice?: () => Awaitable<MetabotCommandResult<unknown>>;

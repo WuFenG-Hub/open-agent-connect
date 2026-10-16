@@ -17,6 +17,7 @@ const POST_VERBS: Record<string, OwnerVerb> = {
   '/api/owner/create': 'create',
   '/api/owner/import': 'import',
   '/api/owner/rename': 'rename',
+  '/api/owner/reveal': 'reveal',
   '/api/owner/bind-device': 'bindDevice',
 };
 

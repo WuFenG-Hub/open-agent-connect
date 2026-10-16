@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>__PAGE_TITLE__</title>
+    <link rel="stylesheet" href="/ui/shared.css" />
+    <style>
+      .team-shell {
+        display: grid;
+        gap: 16px;
+      }
+      .team-toolbar {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 4px 2px 18px;
+        border-bottom: 1px solid rgba(22, 33, 50, .11);
+      }
+      .team-heading-block {
+        display: grid;
+        gap: 5px;
+      }
+      .team-kicker {
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+      }
+      .team-toolbar h1 {
+        font-size: 28px;
+        letter-spacing: -.035em;
+        line-height: 1.12;
+      }
+      .team-heading-copy {
+        max-width: 620px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .team-status-line {
+        margin-top: 4px;
+        color: var(--dim);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+      .team-grid {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+      .team-section {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+        border: 1px solid rgba(160, 175, 197, .62);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 10px 26px rgba(19, 35, 67, .07);
+        padding: 20px 22px;
+      }
+      .team-section > header {
+        display: grid;
+        gap: 4px;
+      }
+      .team-section h2 {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -.015em;
+      }
+      .team-section .team-section-body {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .team-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .team-table th {
+        text-align: left;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      .team-table td {
+        padding: 8px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      .team-table .mono {
+        font-family: var(--mono);
+        font-size: 11px;
+        overflow-wrap: anywhere;
+      }
+      .team-table .team-row-actions {
+        white-space: nowrap;
+        text-align: right;
+      }
+      .team-empty {
+        color: var(--dim);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .team-form {
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .team-form .field {
+        flex: 1 1 260px;
+        min-width: 0;
+      }
+      .team-form input {
+        width: 100%;
+        min-width: 0;
+        height: 36px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--surface3);
+        color: var(--text);
+        padding: 0 10px;
+        font: 12px/1.2 var(--mono);
+      }
+      .team-form input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(46, 111, 237, .12);
+        outline: none;
+      }
+      .team-note {
+        color: var(--dim);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .team-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 11px;
+        font-weight: 650;
+        color: var(--muted);
+        background: var(--surface2);
+      }
+      .team-pill[data-tone="pending"] {
+        color: var(--amber);
+        border-color: #fde68a;
+        background: var(--amber-dim);
+      }
+      @media (max-width: 820px) {
+        .team-toolbar {
+          display: grid;
+          align-items: start;
+        }
+        .team-toolbar h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="topbar-logo" href="/ui/hub">MetaBot</a>
+        <div class="topbar-sep"></div>
+        <span class="topbar-title">Team &amp; Trust</span>
+        <div class="topbar-spacer"></div>
+        <nav class="topbar-nav">__PAGE_NAV__</nav>
+      </header>
+      <main class="content">
+        __PAGE_CONTENT__
+      </main>
+    </div>
+    <script>__PAGE_SCRIPT__</script>
+  </body>
+</html>

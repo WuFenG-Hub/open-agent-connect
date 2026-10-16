@@ -29,7 +29,14 @@ function createOwnerDaemonHandlers(input) {
     return {
         who: async () => {
             const record = await (0, rootOwnerIdentity_1.loadRootOwnerIdentity)(systemHomeDir);
-            return (0, commandResult_1.commandSuccess)({ identity: record ? (0, rootOwnerIdentity_1.toRootOwnerIdentityPublic)(record) : null });
+            let deviceBinding = null;
+            if (record && input.deviceBindingStatus) {
+                deviceBinding = await input.deviceBindingStatus().catch(() => 'unknown');
+            }
+            return (0, commandResult_1.commandSuccess)({
+                identity: record ? (0, rootOwnerIdentity_1.toRootOwnerIdentityPublic)(record) : null,
+                ...(deviceBinding ? { deviceBinding } : {}),
+            });
         },
         create: async (rawInput) => {
             try {
@@ -67,6 +74,15 @@ function createOwnerDaemonHandlers(input) {
             try {
                 const record = await (0, rootOwnerIdentity_1.renameRootOwnerIdentity)(systemHomeDir, name);
                 return (0, commandResult_1.commandSuccess)({ identity: (0, rootOwnerIdentity_1.toRootOwnerIdentityPublic)(record) });
+            }
+            catch (error) {
+                return rootOwnerFailure(error);
+            }
+        },
+        reveal: async () => {
+            try {
+                const mnemonic = await (0, rootOwnerIdentity_1.revealRootOwnerMnemonic)(systemHomeDir);
+                return (0, commandResult_1.commandSuccess)({ mnemonic });
             }
             catch (error) {
                 return rootOwnerFailure(error);
