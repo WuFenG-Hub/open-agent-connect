@@ -124,6 +124,26 @@ export const emptySurfRunStats = (): MetawebSurfRunStats => ({
   tasksScheduled: 0,
 });
 
+/** Whether the session produced any activity a consumer can verify.
+ *
+ * `fetched` is deliberately excluded: the briefing sets it, so it can never
+ * prove the session ran. The rest are the counters the session reports — for a
+ * truncated run they come from host receipts (see the watchdog / no-LLM paths
+ * in cli/runtime.ts), which is exactly the evidence that its work was real. */
+export function surfSessionDidSomething(stats: MetawebSurfRunStats): boolean {
+  return stats.deepRead > 0
+    || stats.savedToKb > 0
+    || stats.knowledgePoints > 0
+    || stats.liked > 0
+    || stats.commented > 0
+    || stats.answered > 0
+    || stats.posted > 0
+    || stats.challenged > 0
+    || stats.inboxHandled > 0
+    || stats.discoveredProtocols > 0
+    || stats.tasksScheduled > 0;
+}
+
 export interface MetawebSurfRunRecord {
   id: string;
   trigger: MetawebSurfTrigger;

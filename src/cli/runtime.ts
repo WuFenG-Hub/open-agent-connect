@@ -7150,6 +7150,14 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         memoryEnabled,
       });
       const report = parseSurfRunReport(finalText);
+      // The turn synthesises a report when it hits the tool-step ceiling without
+      // ever emitting a final one, and that report is non-null exactly like a
+      // real report. This is the only place that knows the turn's own output
+      // shape, so the run is marked truncated here; a truncated run that also
+      // produced no verifiable activity must not consume the seen ledger (see
+      // the guard in core/surf/service.ts).
+      const { SURF_STEP_CEILING_SUMMARY } = await import('../core/surf/turn.js');
+      const truncated = report.summary === SURF_STEP_CEILING_SUMMARY ? 'step_ceiling' : null;
       // Receipts over self-report: chain-write classes and scheduled tasks
       // come only from what the host actually published.
       const receipts = surfReceiptSeenActions(writeState);
@@ -7169,6 +7177,7 @@ export async function serveCliDaemonProcess(context: Pick<CliRuntimeContext, 'en
         reportMarkdown: report.reportMarkdown,
         reportJson: report.reportJson,
         seenActions: foldSurfReceiptsIntoSeenActions(report.seenActions, writeState),
+        truncated,
       };
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
