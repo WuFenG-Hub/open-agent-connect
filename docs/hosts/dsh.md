@@ -48,7 +48,8 @@ dsh plugin --profile web add open-agent-connect-dsh
 
 Restart `dsh web` and hard-refresh the browser.
 
-**Desktop app.** The DSH desktop app (0.1.7-rc.2+) runs profile `desktop`
+**Desktop app.** The DSH desktop app (0.2.0-rc.2+; also 0.1.7-rc.2 and later
+0.1.x lines) runs profile `desktop`
 (`~/.dsh/profiles/desktop`) on the same web-app composition, so the same
 plugin build works there. Install it from the app's plugin manager (Settings →
 Plugins) — the app bundles its own pnpm and needs no system Node — or from a
