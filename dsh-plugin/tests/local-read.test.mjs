@@ -10,6 +10,7 @@ const { runCli } = require('../../dist/cli/main.js')
 const localRead = await import('../lib/local-read.js')
 
 const ORIGINAL_HOME = process.env.HOME
+const ORIGINAL_DSH_HOME = process.env.DSH_HOME
 
 async function makeHome() {
   return mkdtemp(join(tmpdir(), 'dsh-localread-'))
@@ -91,6 +92,13 @@ test('per-bot reads return null (CLI fallback) for an unknown profile', async ()
 test('localChatSkills lists the DSH skill scope even without a primary runtime binding', async () => {
   const home = await makeHome()
   process.env.HOME = home
+  // The DSH global skill root is declared as `homeEnv: 'DSH_HOME'` in the
+  // platform registry, and that override names the platform home directory
+  // itself — the resolver looks in `<DSH_HOME>/skills`. So `~/.dsh/skills` is
+  // only reachable through `~/.dsh` here: without DSH_HOME the resolver falls
+  // back to the OS account home (`os.userInfo()`, which a faked $HOME cannot
+  // move) and the `dsh-greet` fixture below is never seen.
+  process.env.DSH_HOME = join(home, '.dsh')
   try {
     // Hand-written profile fixture (same pattern as the grouptask test): the
     // identity exists, but no enabled primary LLM runtime binding does. The
@@ -140,6 +148,8 @@ test('localChatSkills lists the DSH skill scope even without a primary runtime b
     assert.deepEqual(names, ['dsh-greet', 'shared-lookup'])
   } finally {
     process.env.HOME = ORIGINAL_HOME
+    if (ORIGINAL_DSH_HOME === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = ORIGINAL_DSH_HOME
     await rm(home, { recursive: true, force: true })
   }
 })
