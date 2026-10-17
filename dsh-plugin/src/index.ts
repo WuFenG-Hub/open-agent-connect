@@ -89,18 +89,20 @@ import { reconcilePresets } from './preset.js'
 import { registryBackendOf } from './preset-registry.js'
 import { configureMessageSources, oacMessageSource } from './message-source.js'
 import { dispatchSection } from './sections.js'
-import { isTrustedApiRequest } from './trust-fence.js'
 
 /** Cordis plugin name (patch id `oac-dsh`). */
 export const name = 'oac-dsh'
 
 /**
- * `agentPresets` and `llm` are required. `webServer` + `webRuntime` are the trust seam.
+ * `agentPresets` and `llm` are required. `webServer` + `connection` are the
+ * trust seam: DSH 0.2.1 replaced the 0.1.7 `webRuntime` service with
+ * `connection`, and `ctx.connection.requestRejection` applies the kernel
+ * Host/Origin + browser-auth fence to this plugin's Web route.
  * `approval` is required so publish can call the DSH native confirmation dialog.
  * `tools` and `systemPrompt` are required so Bot Browser tools register on the
  * host global layer (visible to every session) instead of racing agent/created.
  */
-export const inject = ['webServer', 'webRuntime', 'agentPresets', 'llm', 'approval', 'tools', 'systemPrompt']
+export const inject = ['webServer', 'connection', 'agentPresets', 'llm', 'approval', 'tools', 'systemPrompt']
 
 export const API_PREFIX = '/oac/api'
 
@@ -470,15 +472,27 @@ function registerApi(
   botHub: BotChangeEventHub,
   onRuntimeInstalled?: (health: HealthPayload) => void,
 ): () => void {
-  const fence = (req: PluginHttpRequest): boolean =>
-    isTrustedApiRequest(req, ctx.webRuntime.trustedHosts)
+  // Kernel Connection fence: Host/Origin checks plus browser authentication,
+  // applied to this Web route through the injected `connection` service
+  // (replaces the plugin-local trust-fence copy). A returned status refuses
+  // the request — 403 for a failed Host/Origin check, 401 for a trusted but
+  // unauthenticated caller — while `undefined` admits it.
+  const fence = (req: PluginHttpRequest): 401 | 403 | undefined =>
+    ctx.connection.requestRejection(req)
 
   return ctx.webServer.register({
     kind: 'prefix',
     path: API_PREFIX,
     handler: async (req: PluginHttpRequest, res: PluginHttpResponse) => {
-      if (!fence(req)) {
-        writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+      const rejection = fence(req)
+      if (rejection !== undefined) {
+        writeJson(res, rejection, {
+          ok: false,
+          error: {
+            code: rejection === 401 ? 'unauthorized' : 'forbidden',
+            message: rejection === 401 ? 'unauthorized' : 'forbidden',
+          },
+        })
         return
       }
       const method = apiMethod(req, API_PREFIX)
@@ -973,7 +987,6 @@ export {
 } from './cli-bridge.js'
 export { DAEMON_PINNED_SKIP, runMetabotPinned } from './daemon-pinned-run.js'
 export { isSupportedNodeVersion, npmGlobalModulesRoot, resolveNpmBinary, resolveNodeBinary } from './node-runtime.js'
-export { isTrustedApiRequest } from './trust-fence.js'
 export { bootstrapHealth } from './bootstrap.js'
 export { createBot, deleteBot, listLlmDirectory, updateBot } from './bots.js'
 export { dispatchBotAdvancedRoutes, HOMEPAGE_UPLOAD_MAX_BYTES } from './bot-advanced.js'

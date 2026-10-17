@@ -367,7 +367,7 @@ test('hub command roundtrip resolves when a client posts the result', async () =
 test('browser/state and command-result routes update the hub', async () => {
   const routes = []
   const ctx = {
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: {
       register(route) {
         routes.push(route)

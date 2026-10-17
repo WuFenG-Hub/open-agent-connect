@@ -90,7 +90,7 @@ async function withPresetCtx(run) {
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -454,7 +454,7 @@ async function withRegistryCtx(run) {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
     logger: { warn: (message) => warnings.push(message) },
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -559,7 +559,7 @@ test('generatePreset (registry backend): composes from the installed dsh-web-app
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -589,7 +589,7 @@ test('generatePreset (registry backend): the own-location anchor does not depend
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -647,7 +647,7 @@ test('generatePreset (registry backend): resolves the shipped standard patch fro
       : undefined),
     dshHomePath: (...segments) => join(tmp, ...segments),
     logger: { warn: () => {} },
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }

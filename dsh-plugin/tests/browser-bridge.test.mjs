@@ -228,7 +228,7 @@ test('hub resolve returns the localUiUrl without emitting an open or touching th
 
 test('browser/open without a started hub answers daemon_unreachable', async () => {  const routes = []
   const ctx = {
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: {
       register(route) {
         routes.push(route)
