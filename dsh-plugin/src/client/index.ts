@@ -36,6 +36,7 @@ import { BotPresetSeat, type BotPresetSeatInjected } from './BotPresetSeat.tsx'
 import { HeaderBotLabel, type HeaderBotLabelInjected } from './HeaderBotLabel.tsx'
 import { SessionIdHeader } from './SessionIdHeader.tsx'
 import { PluginSettingsPanel } from './PluginSettingsPanel.tsx'
+import { QuoteReplyOverlay, type QuoteReplyInjected } from './QuoteReplyOverlay.tsx'
 import { TrackingTasksPanel } from './TrackingTasksPanel.tsx'
 import { A2AUnreadController } from './a2a-unread-store.ts'
 import { A2APanelStore, type A2APanelTarget } from './a2a-panel-store.ts'
@@ -62,11 +63,12 @@ import { memoryEn, MEMORY_NS, memoryZh, type MemoryLocaleKey } from './locale-me
 import { userEn, USER_NS, userZh, type UserLocaleKey } from './locale-user.ts'
 import { svcEn, SVC_NS, svcZh, type ServicesLocaleKey } from './locale-services.ts'
 import { trafficEn, TRAFFIC_NS, trafficZh, type TrafficLocaleKey } from './locale-traffic.ts'
+import { qrEn, QR_NS, qrZh, type QuoteReplyLocaleKey } from './locale-quote-reply.ts'
 import type { SeatSessionSummary } from './preset-seat-store.ts'
 import { BotPresetSeatController } from './preset-seat-store.ts'
 import { startHeroIdentityMount } from './hero-identity.ts'
 import { ServicesPanel } from './ServicesPanel.tsx'
-import { APPS_CSS, BOTS_CSS, BOTSPAGE_CSS, BROWSER_CSS, CONVTABS_CSS, GROUPTASK_CSS, HERO_CSS, MEMORY_CSS, PRESETS_CSS, TRACKING_CSS, TRAFFIC_CSS, USER_CSS } from './styles.ts'
+import { APPS_CSS, BOTS_CSS, BOTSPAGE_CSS, BROWSER_CSS, CONVTABS_CSS, GROUPTASK_CSS, HERO_CSS, MEMORY_CSS, PRESETS_CSS, QUOTEREPLY_CSS, TRACKING_CSS, TRAFFIC_CSS, USER_CSS } from './styles.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -78,6 +80,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'settings.oac.traffic': TrafficLocaleKey
     'settings.oac.memory': MemoryLocaleKey
     'settings.oac.user': UserLocaleKey
+    'settings.oac.quoteReply': QuoteReplyLocaleKey
   }
 }
 
@@ -96,7 +99,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const tag = document.createElement('style')
     tag.dataset.plugin = 'open-agent-connect-dsh'
-    tag.textContent = BOTS_CSS + PRESETS_CSS + HERO_CSS + APPS_CSS + TRAFFIC_CSS + BROWSER_CSS + MEMORY_CSS + USER_CSS + GROUPTASK_CSS + CONVTABS_CSS + TRACKING_CSS + BOTSPAGE_CSS
+    tag.textContent = BOTS_CSS + PRESETS_CSS + HERO_CSS + APPS_CSS + TRAFFIC_CSS + BROWSER_CSS + MEMORY_CSS + USER_CSS + GROUPTASK_CSS + CONVTABS_CSS + TRACKING_CSS + BOTSPAGE_CSS + QUOTEREPLY_CSS
     document.head.append(tag)
     return () => { tag.remove() }
   }, 'oac-dsh: styles')
@@ -108,6 +111,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(TRAFFIC_NS, { zh: trafficZh, en: trafficEn }), 'oac-dsh: traffic dictionary')
   ctx.effect(() => ctx.locale.register(MEMORY_NS, { zh: memoryZh, en: memoryEn }), 'oac-dsh: memory dictionary')
   ctx.effect(() => ctx.locale.register(USER_NS, { zh: userZh, en: userEn }), 'oac-dsh: user dictionary')
+  ctx.effect(() => ctx.locale.register(QR_NS, { zh: qrZh, en: qrEn }), 'oac-dsh: quote reply dictionary')
   const t = ctx.locale.bind(NS)
   const tBrowser = ctx.locale.bind(BROWSER_NS)
   const tConv = ctx.locale.bind(CONV_NS)
@@ -655,5 +659,36 @@ export function apply(ctx: ClientContext): void {
     // this mounts through the DOM (hero-identity.ts) and reads the same seat
     // store the chip drives.
     scope.effect(() => startHeroIdentityMount(seat.store), 'oac-dsh: hero bot identity')
+  })
+
+  // Selection-driven quote reply: a session-scope composer-overlay entry that
+  // floats a "quote this passage" action over transcript selections and
+  // appends the picked passage (source header + capped excerpt) into the
+  // kernel-owned draft through the public input action face. The feature
+  // hides itself instead of erroring when an extension point is missing:
+  // `slots.inject` only runs while the kernel declares
+  // `conversation.input.overlay` (collapse disposes it, a later declaration
+  // re-installs), and the component probes the action face before rendering
+  // anything.
+  ctx.inject(['slots', 'conversation', 'sessions'], (scope: ClientContext) => {
+    scope.slots.inject('conversation.input.overlay', () => scope.slots.register({
+      name: 'conversation.input.overlay',
+      id: 'oac-quote-reply',
+      order: 30,
+      locale: QR_NS,
+      // Session-scoped slots hand the factory the rendered session's id.
+      inject: (sessionId: string): QuoteReplyInjected => ({
+        // Session-routed composer notice: `input.for(actx)` lands the notice
+        // on THAT session's composer even after a switch. Resolved lazily per
+        // call and degraded to a no-op when the session input face is
+        // unavailable (another kernel line) — never throws from here.
+        notify: (level, text) => {
+          const actx = scope.sessions.scope(sessionId as Parameters<typeof scope.sessions.scope>[0])
+          const input = actx?.get('conversation')?.input
+          if (actx === undefined || input === undefined) return
+          input.for(actx).notify(level, text)
+        },
+      }),
+    }, QuoteReplyOverlay))
   })
 }
