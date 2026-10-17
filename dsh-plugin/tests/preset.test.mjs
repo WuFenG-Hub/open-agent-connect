@@ -90,7 +90,7 @@ async function withPresetCtx(run) {
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -454,7 +454,7 @@ async function withRegistryCtx(run) {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
     logger: { warn: (message) => warnings.push(message) },
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -559,7 +559,7 @@ test('generatePreset (registry backend): composes from the installed dsh-web-app
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -569,7 +569,14 @@ test('generatePreset (registry backend): composes from the installed dsh-web-app
     const definition = mock.calls.register[0]
     const persona = definition.plugins.find((entry) => entry.id === 'persona')
     assert.ok(persona.config.prefix.includes('<slug>regreal</slug>'))
-    assert.equal(typeof persona.config.suffix, 'string', 'real patch persona suffix kept')
+    // The rewrite replaces `config.prefix` with the Bot persona and must not
+    // swallow the rest of the row: pre-0.2.1 standard patches also shipped
+    // `config.suffix` ("Your working directory is {{cwd}}.") and this spot
+    // pinned that the rewrite kept it. DSH 0.2.1 removed `suffix` from the
+    // shipped persona row, so the same survival intent is re-anchored on the
+    // row identity the patch still ships: the row keeps its `name`, with only
+    // `config.prefix` rewritten to the Bot persona (asserted above).
+    assert.equal(persona.name, '@deepseek-ai/dsh-persona', 'real patch persona row kept, not synthesized')
     assert.ok(definition.plugins.some((entry) => entry.id === 'tool-bash'), 'real patch composition rows present')
     await plugin.removePreset(ctx, 'regreal')
   } finally {
@@ -589,7 +596,7 @@ test('generatePreset (registry backend): the own-location anchor does not depend
   const ctx = {
     agentPresets: mock.agentPresets,
     dshHomePath: (...segments) => join(tmp, ...segments),
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }
@@ -647,7 +654,7 @@ test('generatePreset (registry backend): resolves the shipped standard patch fro
       : undefined),
     dshHomePath: (...segments) => join(tmp, ...segments),
     logger: { warn: () => {} },
-    webRuntime: { trustedHosts: [] },
+    connection: { requestRejection: () => undefined },
     webServer: { register: () => () => {} },
     effect: (fn) => { fn() },
   }

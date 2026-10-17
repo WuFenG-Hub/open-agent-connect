@@ -3,8 +3,10 @@
  *
  * Third-party plugins resolve outside DSH's single cordis instance, so
  * upstream `declare module` augmentations do not reach this Context. Keep
- * this file free of Node.js types so the client half can stay browser-only.
+ * this file free of Node.js types so the client half can stay browser-only
+ * (the one type-only kernel import below is resolved by the Node half only).
  */
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 
 /** Request facts route handlers read (structural subset of IncomingMessage). */
 export interface PluginHttpRequest {
@@ -33,10 +35,6 @@ export interface PluginWebRoute {
 
 export interface PluginWebServer {
   register(route: PluginWebRoute): () => void
-}
-
-export interface PluginWebRuntime {
-  trustedHosts: readonly string[]
 }
 
 export interface PluginLogger {
@@ -223,7 +221,12 @@ export interface LlmLike {
 /** Host plugin context: webserver/trust seam plus inject targets for later rounds. */
 export interface HostContext {
   webServer: PluginWebServer
-  webRuntime: PluginWebRuntime
+  /**
+   * DSH 0.2.1 Connection service (the 0.1.7 `webRuntime` replacement):
+   * `requestRejection` applies the kernel Host/Origin + browser-auth fence
+   * to another Web route.
+   */
+  connection: HostConnectionHandle
   logger?: PluginLogger
   effect(fn: () => void | (() => void), label?: string): void
   agentPresets?: AgentPresetsLike

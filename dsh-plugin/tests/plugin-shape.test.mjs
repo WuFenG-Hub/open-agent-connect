@@ -9,7 +9,7 @@ const plugin = await import('../lib/index.js')
 test('host export has the namespace-plugin shape (no stray default)', () => {
   assert.equal('default' in plugin, false)
   assert.equal(plugin.name, 'oac-dsh')
-  assert.deepEqual(plugin.inject, ['webServer', 'webRuntime', 'agentPresets', 'llm', 'approval', 'tools', 'systemPrompt'])
+  assert.deepEqual(plugin.inject, ['webServer', 'connection', 'agentPresets', 'llm', 'approval', 'tools', 'systemPrompt'])
   assert.equal(typeof plugin.apply, 'function')
 })
 
@@ -103,32 +103,28 @@ test('runMetabot parses stdout from a fake CLI entry', async () => {
   assert.deepEqual(result.data.args, ['identity', 'who'])
 })
 
-test('isTrustedApiRequest allows loopback and refuses cross-site', () => {
-  assert.equal(
-    plugin.isTrustedApiRequest({ headers: { host: '127.0.0.1:8787' } }, []),
-    true,
-  )
-  assert.equal(
-    plugin.isTrustedApiRequest(
-      { headers: { host: '127.0.0.1:8787', 'sec-fetch-site': 'cross-site' } },
-      [],
-    ),
-    false,
-  )
-  assert.equal(
-    plugin.isTrustedApiRequest({ headers: { host: 'evil.example:443' } }, []),
-    false,
-  )
-  assert.equal(
-    plugin.isTrustedApiRequest({ headers: { host: 'office.example:443' } }, ['office.example:443']),
-    true,
-  )
+// The local trust fence (a copy of dsh-better-sidebar's `isTrustedApiRequest`)
+// is gone: the 0.2.1 `connection` service owns the Host/Origin fence and
+// browser authentication (`ctx.connection.requestRejection`). Assert the
+// duplicate implementation never comes back as an export.
+test('the plugin no longer exports a local trust fence', () => {
+  assert.equal('isTrustedApiRequest' in plugin, false)
 })
 
-test('apply registers /oac/api and fences untrusted requests', async () => {
+test('apply registers /oac/api and defers every request to the kernel Connection fence', async () => {
   const routes = []
+  const fenced = []
   const ctx = {
-    webRuntime: { trustedHosts: [] },
+    // The kernel service's decision is injected, not reimplemented: the route
+    // must forward whatever status `requestRejection` returns.
+    connection: {
+      requestRejection(req) {
+        fenced.push(req.headers.host)
+        if (req.headers.host === '127.0.0.1:8787') return undefined
+        if (req.headers.host === 'evil.example') return 403
+        return 401
+      },
+    },
     webServer: {
       register(route) {
         routes.push(route)
@@ -144,13 +140,25 @@ test('apply registers /oac/api and fences untrusted requests', async () => {
   assert.equal(routes[0].path, '/oac/api')
   assert.equal(routes[0].kind, 'prefix')
 
+  // Kernel refused on the Host/Origin check (403): the original envelope.
   const forbidden = capture()
   await routes[0].handler(
     request('POST', '/oac/api/health', { host: 'evil.example' }),
     forbidden.res,
   )
   assert.equal(forbidden.status, 403)
+  assert.equal(JSON.parse(forbidden.body).error.code, 'forbidden')
 
+  // Kernel refused as trusted-but-unauthenticated (401): still refused.
+  const unauthorized = capture()
+  await routes[0].handler(
+    request('GET', '/oac/api/health', { host: 'office.example:443' }),
+    unauthorized.res,
+  )
+  assert.equal(unauthorized.status, 401)
+  assert.equal(JSON.parse(unauthorized.body).error.code, 'unauthorized')
+
+  // Kernel admitted (undefined): the route proceeds to its handler.
   const health = capture()
   await routes[0].handler(
     request('GET', '/oac/api/health', { host: '127.0.0.1:8787' }),
@@ -161,6 +169,9 @@ test('apply registers /oac/api and fences untrusted requests', async () => {
   assert.equal(body.ok, false)
   assert.equal(body.error, 'bootstrap skipped')
   assert.equal(body.cliPath, null)
+
+  // Every request consulted the kernel handle — no local fallback path ran.
+  assert.deepEqual(fenced, ['evil.example', 'office.example:443', '127.0.0.1:8787'])
 })
 
 test('bootstrapHealth records CLI/daemon/bind failures without throwing', async () => {
