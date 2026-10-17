@@ -14,10 +14,11 @@ Host kernel requirement: this plugin is built and verified against the DSH
 `^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`, with the
 wider `^0.1.2-alpha.2 || ^0.1.3-alpha.1` spans kept on the packages the
 preset/persona surface still shares. The same build serves the DSH **desktop
-app** (Electron, 0.1.7-rc.2+): it runs profile `desktop`
+app** (Electron): it runs profile `desktop`
 (`~/.dsh/profiles/desktop`) composed from the same web-app bundle, so
-`webServer`/`webRuntime` are present, the `platform: "web"` client bundle
-loads, and every slot injection behaves as in the browser. Install it from the
+`webServer` and the kernel `connection` service are present, the
+`platform: "web"` client bundle loads, and every slot injection behaves as in
+the browser. Install it from the
 app's plugin manager, or from a shell with `dsh plugin --profile desktop add
 open-agent-connect-dsh`. The 0.2.0 adaptations worth knowing about:
 
@@ -806,7 +807,7 @@ shows — a raw CLI error never reaches the panel.
 
 ## Host routes
 
-All under `/oac/api/*`, same browser-trust fence as better-sidebar (loopback Host or `trustedHosts`; refuse `sec-fetch-site: cross-site`).
+All under `/oac/api/*`, each request first passing the kernel Connection fence (`ctx.connection.requestRejection`: Host/Origin checks plus browser authentication — 403 fails the Host/Origin check, 401 is trusted but unauthenticated).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -985,7 +986,7 @@ page is open, `pagesReached` stays `0`, and the skill behaves exactly as before.
 
 ## Layout
 
-- Host: Cordis `name` `oac-dsh`, `inject` `webServer`, `webRuntime`, `agentPresets`, `llm`, `approval`, `tools`, `systemPrompt`
+- Host: Cordis `name` `oac-dsh`, `inject` `webServer`, `connection`, `agentPresets`, `llm`, `approval`, `tools`, `systemPrompt`
 - Client: `dsh.client` bundle, no second `cordis.patch.yml` row; inject `slots`, `locale`, `remote`, `remote.agentPresets`, `remote.session`, `layout`, `sidebarRight`, `sidebarRightTabs`
 - Client surfaces: the Bots page (left-rail `sidebar.panellist` row id `oac-bots`, capture-intercepted into a `shell.overlay` toggle + overlay entry id `oac-bots` declaring the `oac.bots.section` child slot; the section entries `oac-bots`, `oac-apps`, `oac-settings` — the merged Plugin Settings (User + Traffic as top tabs) — register into it), the A2A Chat `shell.overlay` panel (id `oac-a2a`, center column only; its `sidebar.panellist` row is hidden), and the right-Sidebar `bot-browser` page tab kind (type + keyed `sidebar.right.pane.tab` body + `.title` chip, plus a guide-page capsule). No `main` panel and no `settings.section` entries — the right Sidebar stays mounted under both overlays and DSH Settings stays stock.
 - Capability core remains the OAC CLI. This package does not wrap every `metabot` verb as a Cordis tool.
