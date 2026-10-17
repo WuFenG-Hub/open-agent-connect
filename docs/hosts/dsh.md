@@ -105,7 +105,7 @@ dsh plugin --profile web add open-agent-connect-dsh
 
 Restart `dsh web` and hard-refresh the browser.
 
-**Desktop app.** The DSH desktop app (0.1.7-rc.2+, including 0.2.0) runs profile `desktop`
+**Desktop app.** The DSH desktop app (0.1.7-rc.2+, including 0.2.1-rc.2) runs profile `desktop`
 (`~/.dsh/profiles/desktop`) on the same web-app composition, so the same
 plugin build works there. Install it from the app's plugin manager (Settings →
 Plugins) — the app bundles its own pnpm and needs no system Node — or from a
@@ -116,6 +116,11 @@ dsh plugin --profile desktop add open-agent-connect-dsh
 ```
 
 Restart the app afterwards; its window reloads with the new plugin.
+
+On DSH 0.2.1, use plugin 0.9.6 or newer. Plugin 0.9.5 was built against the old
+`webRuntime` trust seam; DSH 0.2.1 no longer provides that service, so 0.9.5
+stays pending and the Bots page never appears. Fully restart DSH after replacing
+an already-loaded build.
 
 On apply the plugin starts the OAC daemon and binds `metabot-*` into
 `${DSH_HOME:-$HOME/.dsh}/skills`. It prefers `oac install --host dsh`; if only

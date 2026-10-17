@@ -117,7 +117,7 @@ full Bots page to DSH and runs OAC work inside real DSH sessions.
 Prerequisites:
 
 - A DSH `web` profile already running (`dsh web`). Supported kernel lines:
-  0.1.5, 0.1.6, 0.1.7, and 0.2.0.
+  0.1.5, 0.1.6, 0.1.7, 0.2.0, and 0.2.1 (including 0.2.1-rc.2).
 - Node.js 20-24 on the machine for the `metabot` CLI. DSH itself may run on
   another Node.
 
@@ -134,7 +134,10 @@ daemon - no terminal needed (a copyable terminal command appears when npm
 lacks the permissions). Pre-installing the runtime globally yourself still
 works.
 
-Restart `dsh web` and hard-refresh the browser.
+Restart `dsh web` and hard-refresh the browser. A DSH 0.2.1 host needs plugin
+0.9.6 or newer: the previously published 0.9.5 build still waits for the
+removed `webRuntime` service and never mounts. If an older build was already
+loaded, replace it and fully restart DSH instead of only reloading the page.
 
 **Desktop app.** The DSH desktop app (0.1.7-rc.2 or newer) can install the
 same package from its own plugin manager (Settings → Plugins), or from a

@@ -69,7 +69,7 @@ jobs:
       matrix:
         # Supported kernel lines (prerelease-anchored peers — see
         # dsh-plugin/README.md). Bump/extend when a new kernel line ships.
-        dsh: ['0.1.7-rc.2', '0.2.0-rc.2']
+        dsh: ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2']
     steps:
       - uses: actions/checkout@v7
 

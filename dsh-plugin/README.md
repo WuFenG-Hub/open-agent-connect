@@ -9,8 +9,8 @@ dsh plugin --profile web add open-agent-connect-dsh
 End-user install, Node `>=20 <25`, first Bot, and first chat: `docs/hosts/dsh.md`.
 
 Host kernel requirement: this plugin is built and verified against the DSH
-**0.2.0-rc.2** client surface and runs on the
-**0.1.5**, **0.1.6**, **0.1.7**, and **0.2.0** kernel lines — most peer ranges are
+**0.2.1-rc.2** client surface and runs on the
+**0.1.5**, **0.1.6**, **0.1.7**, **0.2.0**, and **0.2.1** kernel lines — most peer ranges are
 `^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`, with the
 wider `^0.1.2-alpha.2 || ^0.1.3-alpha.1` spans kept on the packages the
 preset/persona surface still shares. The same build serves the DSH **desktop
@@ -20,7 +20,36 @@ app** (Electron): it runs profile `desktop`
 `platform: "web"` client bundle loads, and every slot injection behaves as in
 the browser. Install it from the
 app's plugin manager, or from a shell with `dsh plugin --profile desktop add
-open-agent-connect-dsh`. The 0.2.0 adaptations worth knowing about:
+open-agent-connect-dsh`.
+
+**Upgrading to DSH 0.2.1.** Use plugin **0.9.6** or newer. DSH 0.2.1 removed
+the `webRuntime` service; npm plugin 0.9.5 still waits for it (`inject`), stays
+`pending`, and shows no Bots page. 0.9.6 injects `connection` and delegates
+`/oac/api` request admission to `ctx.connection.requestRejection`, which
+enforces the kernel Host/Origin fence and browser authentication. Replace an
+already installed older build and **fully restart DSH**; a browser refresh or
+profile HMR does not replace a host-half plugin that is already loaded.
+
+The 0.2.1 adaptations worth knowing about:
+
+- **Connection replaces the local trust-fence copy.** `webRuntime` was
+  removed by DSH 0.2.1-alpha.1; `webStartup.trustedHosts` now feeds the
+  kernel `connection` row. The plugin registers `connection` as a required
+  host service and returns the kernel's 401/403 decision with the existing
+  JSON error envelope. No local Host/Origin implementation remains.
+- **Compatibility uses `engines.dsh` on current kernels.** DSH
+  0.2.1-alpha.3 reads `engines.dsh` before DSH peer ranges. The plugin
+  declares the supported kernel span once; the peer ranges continue to
+  cover 0.1.5-0.2.0 gates. `@deepseek-ai/dsh-client-connection` peers cover
+  every supported line, and the stale optional `agent-preset-registry` peer
+  was dropped because the plugin never imports that package.
+- **No host/client API break in 0.2.1-rc.2.** The rc.2 client additions
+  (DeepSeek Search/Fetch settings, provider-aware model-label slot,
+  temporary 1017 label) are additive. The client boot graph still loads the
+  `platform: "web"` bundle and the declared slot injections; the desktop
+  surface was exercised with the Bots page and `/oac/api/health`.
+
+The 0.2.0 adaptations worth knowing about:
 
 - **Peer ranges widened for the compatibility gate.** Every
   `@deepseek-ai/dsh-*` peer range gained `|| ^0.2.0-rc.1`, and the stale
@@ -105,8 +134,9 @@ The 0.1.7 adaptations worth knowing about:
   `@deepseek-ai/dsh*` peer ranges against the running runtime version
   (prereleases included) and disables an unsatisfied row with an stderr
   diagnostic instead of letting it crash the profile. This plugin's peer
-  ranges track every supported kernel (currently through 0.2.0-rc.2), so
-  install and boot stay silent — keep
+  ranges still cover the 0.1.5-0.2.0 gates, while an explicit
+  `engines.dsh` range (`>=0.1.5-alpha.1 <0.3.0-0`) is authoritative on
+  0.2.1-alpha.3+, so install and boot stay silent — keep
   every range anchored on a prerelease lower bound (`^0.1.7-alpha.1`,
   `^0.2.0-rc.1`, never
   a bare `^0.1.7`, which excludes rc builds). If a future kernel outgrows
