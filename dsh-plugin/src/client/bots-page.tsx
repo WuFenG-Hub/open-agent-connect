@@ -36,6 +36,7 @@ import type { CommonKeyOf, InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh
 import type { ObservableSnapshot, SnapshotSelectorHook, SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { UsePanelInfo } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { CenterOverlayFrame } from './overlay-frame.tsx'
+import { PluginUpdateBanner } from './PluginUpdateBanner.tsx'
 import { BOTS_PANEL_ROW_MARK } from './a2a-panel-row.ts'
 import type { BotsPagePanelState } from './bots-page-store.ts'
 import {
@@ -195,6 +196,7 @@ export function BotsPage({ t, renderSlot, useSections, close, openBotPage }: Bot
         </div>
       </nav>
       <div className="oac-bots-page-content">
+        <PluginUpdateBanner t={t} />
         {rows.filter((row) => row.id === active || visitedIds.has(row.id)).map((row) => {
           const selected = row.id === active
           return (

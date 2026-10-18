@@ -239,6 +239,12 @@ export const en = {
   confirmDeleteCountdown: 'Confirm Delete ({count}s)',
   confirmDeleteBackedUp: 'Backed up & Confirm Delete',
   healthError: 'OAC host is not ready: {message}',
+  updateAvailable: 'Open Agent Connect update available',
+  updateVersion: 'Current {current} -> latest {latest}',
+  updateNow: 'Update now',
+  updating: 'Updating...',
+  updateRestart: 'Update installed. Restart DSH to finish loading it.',
+  updateFailed: 'Update failed: {message}',
 
   // ── First-run runtime setup card (My Bots) ─────────────────────────────
   setupTitleMissing: 'Open Agent Connect runtime is missing',
@@ -804,6 +810,12 @@ export const zh = {
   confirmDeleteCountdown: '确认删除 ({count}s)',
   confirmDeleteBackedUp: '已备份助记词，并确认删除',
   healthError: 'OAC 宿主未就绪：{message}',
+  updateAvailable: 'Open Agent Connect 可更新',
+  updateVersion: '当前 {current} -> 最新 {latest}',
+  updateNow: '更新',
+  updating: '正在更新...',
+  updateRestart: '已安装，请重启 DSH 加载它。',
+  updateFailed: '更新失败：{message}',
 
   // ── First-run runtime setup card (My Bots) ─────────────────────────────
   setupTitleMissing: '缺少 Open Agent Connect 运行时',

@@ -122,6 +122,15 @@ On DSH 0.2.1, use plugin 0.9.6 or newer. Plugin 0.9.5 was built against the old
 stays pending and the Bots page never appears. Fully restart DSH after replacing
 an already-loaded build.
 
+Plugin 0.9.6 also ships an in-product update bridge. Once the Bots page is
+running, it checks npm `latest` through `/oac/api/update/status`; when a newer
+version exists, a notice above the section content offers **Update now**. The
+button asks DSH's plugin manager to remove the current bundle and install the
+exact npm release through `/oac/api/update/apply`, with the previous installed
+source kept as a rollback target. This is the one-click path for future
+releases; an installation that is already pending because its host half cannot
+load still needs the one-time manual reinstall above.
+
 On apply the plugin starts the OAC daemon and binds `metabot-*` into
 `${DSH_HOME:-$HOME/.dsh}/skills`. It prefers `oac install --host dsh`; if only
 `metabot` is available it runs `metabot host bind-skills --host dsh`. Bind or CLI

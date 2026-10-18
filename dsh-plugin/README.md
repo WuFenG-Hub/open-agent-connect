@@ -30,6 +30,24 @@ enforces the kernel Host/Origin fence and browser authentication. Replace an
 already installed older build and **fully restart DSH**; a browser refresh or
 profile HMR does not replace a host-half plugin that is already loaded.
 
+**Updating the plugin from inside OAC.** 0.9.6 also ships an in-product update
+bridge, so a working installation does not need a terminal for its next
+upgrade. The Bots page asks the host for the npm `latest` version
+(`GET /oac/api/update/status`), and when a newer version exists it renders a
+small notice above the section content with an **Update now** button. The
+button posts to `/oac/api/update/apply`; the host then asks DSH's
+`pluginManager` to remove the current bundle and install the exact npm target,
+with the previously installed source retained as an automatic rollback if the
+install fails. The plugin never replaces package files itself.
+
+The update check is cached for six hours. `OAC_DSH_UPDATE_REGISTRY` may point
+`GET /oac/api/update/status` and the apply preflight at a mirror; set
+`OAC_DSH_UPDATE_DISABLED=1` to turn checks off for development. pnpm's
+supply-chain `minimumReleaseAge` still applies: a just-published version may
+be held back, in which case the update is offered again on a later check.
+A failed update restores the previous installed spec; a successful install
+that reports `restart-required` asks the user to restart DSH.
+
 The 0.2.1 adaptations worth knowing about:
 
 - **Connection replaces the local trust-fence copy.** `webRuntime` was
@@ -842,6 +860,8 @@ All under `/oac/api/*`, each request first passing the kernel Connection fence (
 | Method | Path | Purpose |
 |---|---|---|
 | GET or POST | `/oac/api/health` | `{ cliPath, daemon, skillBind }` |
+| GET | `/oac/api/update/status` | npm `latest` check for this plugin (six-hour cache); returns `{ current, latest, updateAvailable }` and never installs anything |
+| POST | `/oac/api/update/apply` | ask DSH `pluginManager` to remove this bundle and install the exact npm latest, with rollback to the prior installed spec on failure |
 | POST | `/oac/api/runtime/check` | first-run probe: node/npm/CLI availability + runtime-vs-plugin version (drives the setup card) |
 | POST | `/oac/api/runtime/install` | one-click guided runtime install (`npm i -g open-agent-connect@latest`), then daemon start + skill bind + preset reconcile retry; failures return the manual command |
 | POST | `/oac/api/who` | `metabot identity who` JSON envelope |

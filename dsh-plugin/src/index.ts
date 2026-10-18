@@ -66,6 +66,7 @@ import type { HostAgentLike, HostContext, HostSessionEventLike, HostSessionLike,
 import { uploadFileBytes } from './file-upload.js'
 import { emptyHealth, type HealthPayload } from './health.js'
 import { apiMethod, readJsonBody, readRawBody, writeJson } from './http.js'
+import { applyPluginUpdate, checkPluginUpdate } from './plugin-update.js'
 import { applyMemoryExtraction, applyMemoryInjection } from './memory-observe.js'
 import { dispatchGroupTaskRoutes } from './grouptask.js'
 import { dispatchMetaTaskRoutes } from './metatask-routes.js'
@@ -579,11 +580,30 @@ function registerApi(
         writeJson(res, 200, getHealth())
         return
       }
+      if (method === 'update/status') {
+        if (req.method === 'GET') {
+          const force = new URL(req.url ?? '/', 'http://dsh.internal').searchParams.get('refresh') === '1'
+          const status = await checkPluginUpdate({ force })
+          writeJson(res, status.ok ? 200 : 502, status.ok
+            ? { ok: true, state: 'success', data: status }
+            : { ok: false, state: 'failed', code: status.code, message: status.message, data: status })
+          return
+        }
+        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
+        return
+      }
       if (req.method !== 'POST') {
         writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
         return
       }
       try {
+        if (method === 'update/apply') {
+          const result = await applyPluginUpdate(ctx)
+          writeJson(res, result.ok ? 200 : 500, result.ok
+            ? { ok: true, state: 'success', data: result }
+            : { ok: false, state: 'failed', code: result.code ?? 'update_failed', message: result.message ?? 'plugin update failed', data: result })
+          return
+        }
         if (method === 'file/upload') {
           const result = await handleFileUpload(req)
           const uploadStatus = result.code === 'not-found' ? 404 : 200

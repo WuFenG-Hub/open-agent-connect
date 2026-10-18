@@ -2335,3 +2335,47 @@ export async function surfDisable(from: string): Promise<void> {
 export async function surfBudgetSet(from: string, budget: number): Promise<void> {
   await post<unknown>('surf/budget', { from, budget })
 }
+
+export type PluginUpdateCheckPayload = {
+  ok: boolean
+  current: string
+  latest?: string
+  updateAvailable: boolean
+  registry?: string
+  checkedAt?: number
+  releaseUrl?: string
+  code?: string
+  message?: string
+}
+
+export type PluginUpdateApplyPayload = {
+  ok: boolean
+  current: string
+  target: string
+  application?: 'applied' | 'restart-required' | 'failed'
+  version?: string
+  code?: string
+  message?: string
+}
+
+/** Read the host-side npm latest check; failures are returned for silent UI fallback. */
+export async function pluginUpdateStatus(refresh = false): Promise<PluginUpdateCheckPayload | null> {
+  try {
+    const response = await fetch('/oac/api/update/status' + (refresh ? '?refresh=1' : ''), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+    const json = await response.json() as { ok?: boolean; data?: unknown; code?: string; message?: string }
+    if (json.ok === true && json.data && typeof json.data === 'object') {
+      return json.data as PluginUpdateCheckPayload
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Ask DSH pluginManager to remove this bundle and install npm latest. */
+export async function pluginUpdateApply(): Promise<PluginUpdateApplyPayload> {
+  return post<PluginUpdateApplyPayload>('update/apply')
+}
