@@ -4,15 +4,17 @@
  * The kernel owns the composer draft (and its @file/@session reference
  * chips), and offers no message-level action slots — so this feature is
  * selection-driven: a non-empty text selection inside a transcript message
- * floats one "quote this passage" action; picking it APPENDS a blockquoted
- * source header (role + position, with the in-generation mark when the source
- * is still streaming) plus a capped excerpt into the kernel draft through the
- * public input action face (`captureInsertion` / `insertText`). The kernel's
- * own chips and text are never replaced, only appended to.
+ * floats one "quote this passage" action; picking it inserts a collapsed
+ * REFERENCE CHIP at the composer caret through the session input facade. The
+ * chip renders as a short label, and its codec serializes the full
+ * blockquoted passage (source header + capped excerpt) at submit time — so
+ * the sent message is byte-identical to a plain-text insert while the draft
+ * stays readable. The kernel's own chips and text are never replaced, only
+ * appended to.
  *
- * The component registers into `conversation.input.overlay` (the floating
- * composer layer) and renders two surfaces from there: the in-place quote bar
- * and, through a portal at the document body, the selection-anchored action.
+ * The component registers into `conversation.input.dock` (the full-width
+ * entries above the composer card) and renders the selection-anchored action
+ * through a portal at the document body.
  * It reads transcript facts from the kernel's own DOM markers
  * (`data-conversation-scroll` scrollport, `data-chat-flow-kind` flow items,
  * `data-streaming` live-generation marker) with pure resolution logic in
@@ -21,31 +23,42 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ReferenceInsert, TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   asQuoteInsertTarget,
   buildQuoteReplyBlock,
-  insertQuoteIntoDraft,
   resolveQuoteReplyTarget,
-  summarizeQuoteReplyExcerpt,
   type QuoteInsertTarget,
   type QuoteReplyLabels,
   type QuoteReplyTarget,
 } from '../quote-reply-logic.ts'
+import {
+  buildQuoteReplyChipLabel,
+  encodeQuoteReplyRef,
+  insertQuoteReferenceIntoDraft,
+  QUOTE_REPLY_SOURCE_NAME,
+} from './quote-reply-source.ts'
 
-/** Injected face of the overlay entry (business share; see the registration). */
+/** Injected face of the input-dock entry (business share; see the registration). */
 export interface QuoteReplyInjected {
   /**
    * Session-routed composer notice (`SessionInput.notify`), resolved through
    * `ctx.conversation.input.for(actx)`. Degraded to a no-op when the session
-   * input face is unavailable; the bar still shows the failure inline.
+   * input face is unavailable (another kernel line).
    */
   notify: (level: 'info' | 'error', text: string) => void
+  /**
+   * One span-CAS'd reference-chip insert (`SessionInput.insertReference`),
+   * resolved through the same session-routed input facade. Degraded to
+   * `false` when the facade is unavailable, so the caller's retry/notice
+   * path stays total.
+   */
+  insertReference: (insert: ReferenceInsert, span: TokenSpan) => boolean
 }
 
 export type QuoteReplyOverlayProps =
-  PropsRuntime<'conversation.input.overlay'>
+  PropsRuntime<'conversation.input.dock'>
   & PropsLocale<'settings.oac.quoteReply'>
   & InjectFace<QuoteReplyInjected>
 
@@ -59,15 +72,6 @@ const STREAMING_SELECTOR = '[data-streaming]'
 const ACTION_WIDTH = 132
 const ACTION_HEIGHT = 30
 const ACTION_MARGIN = 8
-
-interface PendingQuote {
-  /** Pick frozen at click time (streaming excerpt included, by design). */
-  target: QuoteReplyTarget
-  /** One-line bar preview. */
-  preview: string
-  /** Both insert attempts were refused — the bar shows the failure + retry. */
-  failed: boolean
-}
 
 interface SelectionAnchor {
   left: number
@@ -112,13 +116,11 @@ function resolveTranscriptSelection(): TranscriptSelection | undefined {
   if (range.toString().trim() === '') return undefined
   const item = elementOf(range.startContainer)?.closest(FLOW_ITEM_SELECTOR) ?? null
   if (item === null || elementOf(range.endContainer)?.closest(FLOW_ITEM_SELECTOR) !== item) return undefined
-  const scrollport = item.closest(TRANSCRIPT_SCROLL_SELECTOR)
-  if (scrollport === null) return undefined
-  const items = Array.from(scrollport.querySelectorAll(FLOW_ITEM_SELECTOR))
+  // The flow item must belong to the resident transcript scrollport; the quote
+  // carries the role and the passage only, so no ordinal is resolved here.
+  if (item.closest(TRANSCRIPT_SCROLL_SELECTOR) === null) return undefined
   const target = resolveQuoteReplyTarget({
     kind: item.getAttribute('data-chat-flow-kind') ?? undefined,
-    kinds: items.map((entry) => entry.getAttribute('data-chat-flow-kind') ?? ''),
-    ownIndex: items.indexOf(item),
     text: range.toString(),
     streaming: item.querySelector(STREAMING_SELECTOR) !== null,
   })
@@ -143,9 +145,9 @@ function anchorOf(range: Range): SelectionAnchor {
   return { left, top }
 }
 
-export function QuoteReplyOverlay({ inputActions, useInput, t, notify }: QuoteReplyOverlayProps): ReactNode {
+export function QuoteReplyOverlay({ inputActions, useInput, t, notify, insertReference }: QuoteReplyOverlayProps): ReactNode {
   // Feature detection (cross-kernel-line guard): the input action face is the
-  // ONLY route to the kernel-owned draft. `conversation.input.overlay` types
+  // ONLY route to the kernel-owned draft. `conversation.input.dock` types
   // the face as always present, but another kernel line may not hand it to
   // this slot's occupants — when the probe fails, the whole feature hides
   // (no error, no half-dead UI). The slot itself is already gated: the
@@ -153,7 +155,6 @@ export function QuoteReplyOverlay({ inputActions, useInput, t, notify }: QuoteRe
   // declares the slot.
   const insertTarget: QuoteInsertTarget<TokenSpan> | undefined = asQuoteInsertTarget<TokenSpan>(inputActions)
   const draft = useInput((state) => state.draft)
-  const [pending, setPending] = useState<PendingQuote | null>(null)
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null)
   const selectionRef = useRef<TranscriptSelection | null>(null)
   const lastKeyRef = useRef<SelectionKey | null>(null)
@@ -204,31 +205,47 @@ export function QuoteReplyOverlay({ inputActions, useInput, t, notify }: QuoteRe
     }
   }, [insertTarget])
 
-  const insertBlock = useCallback((target: QuoteReplyTarget): boolean => {
+  const insertChip = useCallback((target: QuoteReplyTarget): boolean => {
     if (insertTarget === undefined) return false
     const labels: QuoteReplyLabels = {
       source: t('source'),
       roleUser: t('roleUser'),
-      roleAssistant: t('roleAssistant'),
+      roleBot: t('roleBot'),
       streamingMark: t('streamingMark'),
       truncatedNote: t('truncatedNote'),
     }
-    const outcome = insertQuoteIntoDraft(insertTarget, (span) =>
-      buildQuoteReplyBlock({
-        role: target.role,
-        position: target.position,
-        text: target.text,
-        streaming: target.streaming,
-        // Boundary facts stay in their own coordinate spaces: the insertion
-        // point comes from the captured span, the emptiness question from the
-        // published draft projection (chips expand differently per
-        // projection, so the two must never be mixed).
-        draftNonEmpty: draftRef.current.trim() !== '',
-        insertAtStart: span.start === 0,
-      }, labels))
+    const outcome = insertQuoteReferenceIntoDraft(
+      // The span comes from the slot action face; the chip insert rides the
+      // session input facade (`conversation.input.for(actx).insertReference`).
+      { captureInsertion: () => insertTarget.captureInsertion(), insertReference },
+      (span) => {
+        const modelText = buildQuoteReplyBlock({
+          role: target.role,
+          text: target.text,
+          streaming: target.streaming,
+          // Boundary facts stay in their own coordinate spaces: the insertion
+          // point comes from the captured span, the emptiness question from the
+          // published draft projection (chips expand differently per
+          // projection, so the two must never be mixed).
+          draftNonEmpty: draftRef.current.trim() !== '',
+          insertAtStart: span.start === 0,
+        }, labels)
+        return {
+          source: QUOTE_REPLY_SOURCE_NAME,
+          ref: encodeQuoteReplyRef(modelText),
+          // Display-only label: a short excerpt of the passage itself. The ref
+          // above remains the sole carrier of the sent bytes.
+          label: t('chipLabelExcerpt').replace(
+            '{excerpt}',
+            buildQuoteReplyChipLabel(target.text, t('chipLabelFallback')),
+          ),
+          clipboardText: modelText,
+        }
+      },
+    )
     if (!outcome.ok) notify('error', t('insertFailed'))
     return outcome.ok
-  }, [insertTarget, notify, t])
+  }, [insertTarget, insertReference, notify, t])
 
   const pick = useCallback((): void => {
     const selection = selectionRef.current
@@ -236,11 +253,10 @@ export function QuoteReplyOverlay({ inputActions, useInput, t, notify }: QuoteRe
     // The pick is frozen here: the excerpt (and the streaming mark) reflect
     // the selection as it was at click time, even if the message keeps
     // streaming afterwards.
-    const ok = insertBlock(selection.target)
+    insertChip(selection.target)
     dismissedRef.current = true
     setAnchor(null)
-    setPending({ target: selection.target, preview: summarizeQuoteReplyExcerpt(selection.target.text), failed: !ok })
-  }, [insertBlock, insertTarget])
+  }, [insertChip, insertTarget])
 
   if (insertTarget === undefined) return null
 
@@ -259,37 +275,5 @@ export function QuoteReplyOverlay({ inputActions, useInput, t, notify }: QuoteRe
     document.body,
   )
 
-  const bar = pending === null ? null : (
-    <div className="oac-qr-bar" role="group" aria-label={t('barTitle')}>
-      <span className="oac-qr-bar-title">{t('barTitle')}</span>
-      <span className="oac-qr-bar-preview" title={pending.preview}>{pending.preview}</span>
-      {pending.failed
-        ? <span className="oac-qr-bar-error">{t('insertFailed')}</span>
-        : null}
-      {pending.failed
-        ? (
-          <button
-            type="button"
-            className="oac-qr-bar-action"
-            onClick={() => {
-              const ok = insertBlock(pending.target)
-              setPending({ target: pending.target, preview: pending.preview, failed: !ok })
-            }}
-          >
-            {t('retry')}
-          </button>
-        )
-        : null}
-      <button type="button" className="oac-qr-bar-action" onClick={() => { setPending(null) }}>
-        {t('cancel')}
-      </button>
-    </div>
-  )
-
-  return (
-    <>
-      {action}
-      {bar}
-    </>
-  )
+  return action
 }

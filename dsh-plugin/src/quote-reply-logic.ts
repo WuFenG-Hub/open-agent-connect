@@ -5,7 +5,7 @@
  * offers no message-level action slots — a transcript passage can only be
  * picked through a text selection, and the result can only be APPENDED to the
  * kernel-owned draft. This module owns what is testable without a DOM:
- * resolving a citable (role + position) target from transcript facts, capping
+ * resolving a citable role from transcript facts, capping
  * and shaping the excerpt, composing the blockquote text, the
  * capture/insert/retry sequence over the public input action face, and the
  * action-face feature probe.
@@ -23,9 +23,8 @@ export type QuoteReplyRole = 'user' | 'assistant'
 /**
  * Chat flow kinds (`data-chat-flow-kind`) that carry a citable role:
  * user-side messages and assistant output steps. Tool/process/notice flow
- * items are transcript content too, but they have no role or message ordinal
- * to cite — quoting them would have to invent provenance, so the selector
- * does not offer them.
+ * items are transcript content too, but they carry no citable role — quoting
+ * them would have to invent provenance, so the selector does not offer them.
  */
 export const QUOTE_REPLY_USER_KINDS: readonly string[] = ['user', 'steering']
 export const QUOTE_REPLY_ASSISTANT_KINDS: readonly string[] = ['assistant-step']
@@ -39,8 +38,6 @@ export function quoteReplyRoleOfKind(kind: string): QuoteReplyRole | undefined {
 /** One frozen quote pick: where it came from and the verbatim passage. */
 export interface QuoteReplyTarget {
   role: QuoteReplyRole
-  /** 1-based position among the transcript's message items, as rendered. */
-  position: number
   /** Verbatim selected text, trimmed. */
   text: string
   /** Whether the source message was still generating when the passage was picked. */
@@ -51,10 +48,6 @@ export interface QuoteReplyTarget {
 export interface QuoteReplyPick {
   /** `data-chat-flow-kind` of the flow item holding the selection. */
   kind: string | undefined
-  /** Every flow kind in the same transcript scrollport, in document order. */
-  kinds: readonly string[]
-  /** Index of the selection's flow item inside `kinds`. */
-  ownIndex: number
   /** Selection text. */
   text: string
   /** Whether the flow item shows a live-generation marker. */
@@ -62,33 +55,16 @@ export interface QuoteReplyPick {
 }
 
 /**
- * 1-based ordinal of `ownIndex` among the message-kind flow items — how a
- * person would count message ordinals while reading the rendered transcript.
- * @param kinds - flow kinds in document order.
- * @param ownIndex - index of the flow item being cited.
- * @returns the ordinal, or undefined when the index is detached.
- */
-export function quoteReplyPositionOf(kinds: readonly string[], ownIndex: number): number | undefined {
-  if (ownIndex < 0 || ownIndex >= kinds.length) return undefined
-  let position = 0
-  for (let index = 0; index <= ownIndex; index += 1) {
-    if (quoteReplyRoleOfKind(kinds[index]) !== undefined) position += 1
-  }
-  return position === 0 ? undefined : position
-}
-
-/**
  * Resolve one selection into a quotable target. Empty selections produce
- * nothing; non-message flow items and detached items are not citable.
+ * nothing; non-message flow items are not citable. The quoted TEXT is the only
+ * source identifier — no message ordinal is resolved or carried.
  */
 export function resolveQuoteReplyTarget(pick: QuoteReplyPick): QuoteReplyTarget | undefined {
   const role = pick.kind === undefined ? undefined : quoteReplyRoleOfKind(pick.kind)
   if (role === undefined) return undefined
   const text = pick.text.trim()
   if (text === '') return undefined
-  const position = quoteReplyPositionOf(pick.kinds, pick.ownIndex)
-  if (position === undefined) return undefined
-  return { role, position, text, streaming: pick.streaming }
+  return { role, text, streaming: pick.streaming }
 }
 
 /** A capped excerpt and what the cap dropped. */
@@ -139,10 +115,11 @@ export function summarizeQuoteReplyExcerpt(
 
 /** i18n templates and role nouns the block composes from (values pre-translated). */
 export interface QuoteReplyLabels {
-  /** Header template, e.g. `Quoted {role} message (#{position}{streaming}):`. */
+  /** Header template, e.g. `Quoted {role} message{streaming}:`. */
   source: string
   roleUser: string
-  roleAssistant: string
+  /** Display noun for the assistant side (`assistant-step` flow items); reads "bot". */
+  roleBot: string
   /** Substituted into `{streaming}` while the source is still generating. */
   streamingMark: string
   /** Truncation-note template, e.g. `(excerpt truncated; {omitted} characters omitted)`. */
@@ -157,7 +134,6 @@ function formatQuoteReplyTemplate(template: string, vars: Readonly<Record<string
 /** Facts the block composes from; see {@link buildQuoteReplyBlock}. */
 export interface QuoteReplyBlockInput {
   role: QuoteReplyRole
-  position: number
   /** Verbatim picked text; trimmed and capped here. */
   text: string
   streaming: boolean
@@ -169,9 +145,9 @@ export interface QuoteReplyBlockInput {
 
 /**
  * Compose the text one pick APPENDS to the kernel draft: a blockquoted source
- * header (role + position, with the in-generation mark when the source is
- * still streaming), the capped excerpt, and an explicit truncation note when
- * the cap dropped text. The text ends with a newline so typing continues
+ * header (the role, with the in-generation mark when the source is still
+ * streaming), the capped excerpt, and an explicit truncation note when the
+ * cap dropped text. The text ends with a newline so typing continues
  * below the block; a blank-line separator keeps an existing draft readable.
  * @param input - pick facts; see {@link QuoteReplyBlockInput}.
  * @param labels - pre-translated templates; see {@link QuoteReplyLabels}.
@@ -184,8 +160,7 @@ export function buildQuoteReplyBlock(
   maxChars: number = QUOTE_REPLY_EXCERPT_MAX_CHARS,
 ): string {
   const header = formatQuoteReplyTemplate(labels.source, {
-    role: input.role === 'user' ? labels.roleUser : labels.roleAssistant,
-    position: String(input.position),
+    role: input.role === 'user' ? labels.roleUser : labels.roleBot,
     streaming: input.streaming ? labels.streamingMark : '',
   })
   const { excerpt, truncated, omitted } = normalizeQuoteReplyExcerpt(input.text, maxChars)

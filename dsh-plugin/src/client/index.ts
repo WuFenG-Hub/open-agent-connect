@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-agent-preset/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
@@ -37,6 +38,7 @@ import { HeaderBotLabel, type HeaderBotLabelInjected } from './HeaderBotLabel.ts
 import { SessionIdHeader } from './SessionIdHeader.tsx'
 import { PluginSettingsPanel } from './PluginSettingsPanel.tsx'
 import { QuoteReplyOverlay, type QuoteReplyInjected } from './QuoteReplyOverlay.tsx'
+import { QUOTE_REPLY_SOURCE } from './quote-reply-source.ts'
 import { TrackingTasksPanel } from './TrackingTasksPanel.tsx'
 import { A2AUnreadController } from './a2a-unread-store.ts'
 import { A2APanelStore, type A2APanelTarget } from './a2a-panel-store.ts'
@@ -661,18 +663,24 @@ export function apply(ctx: ClientContext): void {
     scope.effect(() => startHeroIdentityMount(seat.store), 'oac-dsh: hero bot identity')
   })
 
-  // Selection-driven quote reply: a session-scope composer-overlay entry that
-  // floats a "quote this passage" action over transcript selections and
-  // appends the picked passage (source header + capped excerpt) into the
-  // kernel-owned draft through the public input action face. The feature
-  // hides itself instead of erroring when an extension point is missing:
-  // `slots.inject` only runs while the kernel declares
-  // `conversation.input.overlay` (collapse disposes it, a later declaration
-  // re-installs), and the component probes the action face before rendering
-  // anything.
-  ctx.inject(['slots', 'conversation', 'sessions'], (scope: ClientContext) => {
-    scope.slots.inject('conversation.input.overlay', () => scope.slots.register({
-      name: 'conversation.input.overlay',
+  // Selection-driven quote reply: a session-scope composer input-dock entry
+  // that floats a "quote this passage" action over transcript selections and
+  // inserts the picked passage as a collapsed reference chip (`oac-quote`
+  // source) at the composer caret. The chip's codec serializes the full
+  // blockquoted passage (source header + capped excerpt) at submit time, so
+  // the sent message is identical to a plain-text insert while the draft
+  // stays readable. The feature hides itself instead of erroring when an
+  // extension point is missing: `slots.inject` only runs while the kernel
+  // declares `conversation.input.dock` (collapse disposes it, a later
+  // declaration re-installs), and the component probes the action face
+  // before rendering anything.
+  ctx.inject(['slots', 'conversation', 'sessions', 'inputTriggers'], (scope: ClientContext) => {
+    // The reference source joins the trigger pipeline once per inject scope;
+    // duplicate registrations throw, so the effect owns the unregister. The
+    // submit attempt resolves this codec through the source roster by name.
+    scope.effect(() => scope.inputTriggers.registerSource(QUOTE_REPLY_SOURCE), 'oac-dsh: quote reply reference source')
+    scope.slots.inject('conversation.input.dock', () => scope.slots.register({
+      name: 'conversation.input.dock',
       id: 'oac-quote-reply',
       order: 30,
       locale: QR_NS,
@@ -687,6 +695,19 @@ export function apply(ctx: ClientContext): void {
           const input = actx?.get('conversation')?.input
           if (actx === undefined || input === undefined) return
           input.for(actx).notify(level, text)
+        },
+        // One span-CAS'd chip insert on the same session-routed facade;
+        // degraded to `false` (never a throw) when the facade is missing, so
+        // the caller's retry + notice path stays total.
+        insertReference: (insert, span) => {
+          const actx = scope.sessions.scope(sessionId as Parameters<typeof scope.sessions.scope>[0])
+          const input = actx?.get('conversation')?.input
+          if (actx === undefined || input === undefined) return false
+          try {
+            return input.for(actx).insertReference(insert, span)
+          } catch {
+            return false
+          }
         },
       }),
     }, QuoteReplyOverlay))
