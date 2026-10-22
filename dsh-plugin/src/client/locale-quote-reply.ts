@@ -3,26 +3,24 @@ export const QR_NS = 'settings.oac.quoteReply'
 
 export const qrEn = {
   action: 'Quote this passage',
-  barTitle: 'Quote',
-  cancel: 'Cancel',
-  retry: 'Retry',
+  chipLabelExcerpt: '“{excerpt}”',
+  chipLabelFallback: 'Quoted passage',
   insertFailed: 'The draft changed — please try again.',
-  source: 'Quoted {role} message (#{position}{streaming}):',
+  source: 'Quoted {role} message{streaming}:',
   roleUser: 'user',
-  roleAssistant: 'assistant',
+  roleBot: 'bot',
   streamingMark: ' · still being generated',
   truncatedNote: '(excerpt truncated; {omitted} characters omitted)',
 }
 
 export const qrZh = {
   action: '引用此段',
-  barTitle: '引用',
-  cancel: '取消',
-  retry: '重试',
+  chipLabelExcerpt: '「{excerpt}」',
+  chipLabelFallback: '引文',
   insertFailed: '草稿已变，请重试',
-  source: '引用{role}消息（第 {position} 条{streaming}）：',
+  source: '引用{role}消息{streaming}：',
   roleUser: '用户',
-  roleAssistant: '助手',
+  roleBot: 'bot',
   streamingMark: ' · 该条仍在生成中',
   truncatedNote: '（摘录已截断，省略 {omitted} 字）',
 }

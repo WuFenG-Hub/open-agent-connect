@@ -18,15 +18,24 @@ const logic = require(path.join(pluginRoot, 'lib', 'quote-reply-logic.js'))
 
 /** zh-Hans labels for the block template (what the component passes from i18n). */
 const ZH_LABELS = {
-  source: '引用{role}消息（第 {position} 条{streaming}）：',
+  source: '引用{role}消息{streaming}：',
   roleUser: '用户',
-  roleAssistant: '助手',
+  roleBot: 'bot',
   streamingMark: ' · 该条仍在生成中',
   truncatedNote: '（摘录已截断，省略 {omitted} 字）',
 }
 
+/** en labels; the header is role-only there too. */
+const EN_LABELS = {
+  source: 'Quoted {role} message{streaming}:',
+  roleUser: 'user',
+  roleBot: 'bot',
+  streamingMark: ' · still being generated',
+  truncatedNote: '(excerpt truncated; {omitted} characters omitted)',
+}
+
 test('resolveQuoteReplyTarget: empty or whitespace-only selections produce nothing', () => {
-  const base = { kind: 'assistant-step', kinds: ['assistant-step'], ownIndex: 0, streaming: false }
+  const base = { kind: 'assistant-step', streaming: false }
   assert.equal(logic.resolveQuoteReplyTarget({ ...base, text: '' }), undefined)
   assert.equal(logic.resolveQuoteReplyTarget({ ...base, text: '   \n\t ' }), undefined)
 })
@@ -34,36 +43,34 @@ test('resolveQuoteReplyTarget: empty or whitespace-only selections produce nothi
 test('resolveQuoteReplyTarget: only role-bearing message kinds are quotable', () => {
   // Transcript is content, but a tool/process block carries no citable role.
   assert.equal(
-    logic.resolveQuoteReplyTarget({ kind: 'turn-process', kinds: ['turn-process'], ownIndex: 0, text: 'x', streaming: false }),
+    logic.resolveQuoteReplyTarget({ kind: 'turn-process', text: 'x', streaming: false }),
     undefined,
   )
   assert.equal(
-    logic.resolveQuoteReplyTarget({ kind: undefined, kinds: ['user'], ownIndex: 0, text: 'x', streaming: false }),
+    logic.resolveQuoteReplyTarget({ kind: undefined, text: 'x', streaming: false }),
     undefined,
   )
 })
 
-test('resolveQuoteReplyTarget: role and 1-based position count only message kinds', () => {
-  const kinds = ['user', 'turn-process', 'assistant-step']
-  const assistant = logic.resolveQuoteReplyTarget({ kind: 'assistant-step', kinds, ownIndex: 2, text: '  引用这段  ', streaming: false })
-  assert.deepEqual(assistant, { role: 'assistant', position: 2, text: '引用这段', streaming: false })
-  const user = logic.resolveQuoteReplyTarget({ kind: 'user', kinds, ownIndex: 0, text: 'q', streaming: false })
-  assert.deepEqual(user, { role: 'user', position: 1, text: 'q', streaming: false })
-  // Steering is a user-side message and counts like one.
-  const steering = logic.resolveQuoteReplyTarget({ kind: 'steering', kinds: ['user', 'steering'], ownIndex: 1, text: 's', streaming: false })
-  assert.deepEqual(steering, { role: 'user', position: 2, text: 's', streaming: false })
-  // A detached flow item (not in the rendered list) cannot be cited.
-  assert.equal(
-    logic.resolveQuoteReplyTarget({ kind: 'user', kinds, ownIndex: 7, text: 'x', streaming: false }),
-    undefined,
-  )
+// Converted from the deleted ordinal coverage: the counter is gone end to end,
+// so the resolution test now pins that NO position field exists on a target
+// (a reappearing ordinal would break this test, not slip through).
+test('resolveQuoteReplyTarget: role resolution — no message ordinal is resolved or carried', () => {
+  const assistant = logic.resolveQuoteReplyTarget({ kind: 'assistant-step', text: '  引用这段  ', streaming: false })
+  assert.deepEqual(assistant, { role: 'assistant', text: '引用这段', streaming: false })
+  const user = logic.resolveQuoteReplyTarget({ kind: 'user', text: 'q', streaming: false })
+  assert.deepEqual(user, { role: 'user', text: 'q', streaming: false })
+  // Steering is a user-side message and resolves like one.
+  const steering = logic.resolveQuoteReplyTarget({ kind: 'steering', text: 's', streaming: false })
+  assert.deepEqual(steering, { role: 'user', text: 's', streaming: false })
+  // The counting helper is removed from the module surface.
+  assert.equal(logic.quoteReplyPositionOf, undefined)
+  assert.ok(!('position' in assistant), 'a target never carries a position again')
 })
 
 test('resolveQuoteReplyTarget: streaming passes through (the pick is frozen at click time)', () => {
   const target = logic.resolveQuoteReplyTarget({
     kind: 'assistant-step',
-    kinds: ['assistant-step'],
-    ownIndex: 0,
     text: 'still writing',
     streaming: true,
   })
@@ -108,24 +115,68 @@ test('summarizeQuoteReplyExcerpt: one-line summary for the quote bar', () => {
 
 test('buildQuoteReplyBlock: blockquote block with source header, excerpt, trailing newline', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'assistant', position: 3, text: '我们先把靶心写成一句委托人能看懂的话，再开始扣扳机。', streaming: false, draftNonEmpty: false, insertAtStart: true },
+    { role: 'assistant', text: '我们先把靶心写成一句委托人能看懂的话，再开始扣扳机。', streaming: false, draftNonEmpty: false, insertAtStart: true },
     ZH_LABELS,
   )
   assert.equal(
     block,
-    '> 引用助手消息（第 3 条）：\n> 我们先把靶心写成一句委托人能看懂的话，再开始扣扳机。\n',
+    '> 引用bot消息：\n> 我们先把靶心写成一句委托人能看懂的话，再开始扣扳机。\n',
   )
+})
+
+// Regression guard for the owner's decision: the sent header names only the
+// ROLE — the quoted text is the sole source identifier. The counting scheme
+// that produced `第 N 条` counted reasoning steps as messages, so it is gone
+// and must never come back. Every shape fact (per-line `> ` prefix, blank-line
+// separator, truncation note, trailing newline) is asserted byte for byte.
+test('buildQuoteReplyBlock: regression — the header carries no ordinal, the quoted text is the only identifier', () => {
+  const cases = [
+    {
+      block: logic.buildQuoteReplyBlock(
+        { role: 'assistant', text: 'quoted passage', streaming: false, draftNonEmpty: false, insertAtStart: true },
+        ZH_LABELS,
+      ),
+      expected: '> 引用bot消息：\n> quoted passage\n',
+    },
+    {
+      block: logic.buildQuoteReplyBlock(
+        { role: 'assistant', text: 'quoted passage', streaming: true, draftNonEmpty: false, insertAtStart: true },
+        ZH_LABELS,
+      ),
+      expected: '> 引用bot消息 · 该条仍在生成中：\n> quoted passage\n',
+    },
+    {
+      block: logic.buildQuoteReplyBlock(
+        { role: 'user', text: 'quoted passage', streaming: false, draftNonEmpty: false, insertAtStart: true },
+        EN_LABELS,
+      ),
+      expected: '> Quoted user message:\n> quoted passage\n',
+    },
+    {
+      block: logic.buildQuoteReplyBlock(
+        { role: 'assistant', text: 'a'.repeat(30), streaming: false, draftNonEmpty: true, insertAtStart: false },
+        ZH_LABELS,
+        10,
+      ),
+      expected: `\n\n> 引用bot消息：\n> ${'a'.repeat(10)}\n> （摘录已截断，省略 20 字）\n`,
+    },
+  ]
+  for (const { block, expected } of cases) {
+    assert.doesNotMatch(block, /第\s*\d+\s*条/, `no zh ordinal in ${JSON.stringify(block)}`)
+    assert.doesNotMatch(block, /#\d+/, `no en ordinal in ${JSON.stringify(block)}`)
+    assert.equal(block, expected)
+  }
 })
 
 test('buildQuoteReplyBlock: appending after existing draft text gets a blank-line separator', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'user', position: 2, text: 'hello', streaming: false, draftNonEmpty: true, insertAtStart: false },
+    { role: 'user', text: 'hello', streaming: false, draftNonEmpty: true, insertAtStart: false },
     ZH_LABELS,
   )
-  assert.ok(block.startsWith('\n\n> 引用用户消息（第 2 条）：\n> hello\n'))
+  assert.ok(block.startsWith('\n\n> 引用用户消息：\n> hello\n'))
   // An empty draft is not "existing text" — no separator even mid-flow.
   const clean = logic.buildQuoteReplyBlock(
-    { role: 'user', position: 2, text: 'hello', streaming: false, draftNonEmpty: false, insertAtStart: false },
+    { role: 'user', text: 'hello', streaming: false, draftNonEmpty: false, insertAtStart: false },
     ZH_LABELS,
   )
   assert.ok(clean.startsWith('> 引用用户消息'))
@@ -133,7 +184,7 @@ test('buildQuoteReplyBlock: appending after existing draft text gets a blank-lin
 
 test('buildQuoteReplyBlock: inserting at the draft start puts the block above existing text without blank lines', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'user', position: 1, text: 'hello', streaming: false, draftNonEmpty: true, insertAtStart: true },
+    { role: 'user', text: 'hello', streaming: false, draftNonEmpty: true, insertAtStart: true },
     ZH_LABELS,
   )
   assert.ok(block.startsWith('> 引用用户消息'))
@@ -142,44 +193,38 @@ test('buildQuoteReplyBlock: inserting at the draft start puts the block above ex
 
 test('buildQuoteReplyBlock: streaming source carries the explicit in-generation mark', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'assistant', position: 3, text: '…', streaming: true, draftNonEmpty: false, insertAtStart: true },
+    { role: 'assistant', text: '…', streaming: true, draftNonEmpty: false, insertAtStart: true },
     ZH_LABELS,
   )
-  assert.ok(block.startsWith('> 引用助手消息（第 3 条 · 该条仍在生成中）：\n'))
+  assert.ok(block.startsWith('> 引用bot消息 · 该条仍在生成中：\n'))
 })
 
 test('buildQuoteReplyBlock: multi-line excerpts keep the blockquote prefix on every line', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'user', position: 1, text: 'one\ntwo\nthree', streaming: false, draftNonEmpty: false, insertAtStart: true },
+    { role: 'user', text: 'one\ntwo\nthree', streaming: false, draftNonEmpty: false, insertAtStart: true },
     ZH_LABELS,
   )
-  assert.equal(block, '> 引用用户消息（第 1 条）：\n> one\n> two\n> three\n')
+  assert.equal(block, '> 引用用户消息：\n> one\n> two\n> three\n')
 })
 
 test('buildQuoteReplyBlock: over-limit excerpts carry the explicit truncation note', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'assistant', position: 1, text: 'a'.repeat(30), streaming: false, draftNonEmpty: false, insertAtStart: true },
+    { role: 'assistant', text: 'a'.repeat(30), streaming: false, draftNonEmpty: false, insertAtStart: true },
     ZH_LABELS,
     10,
   )
   assert.equal(
     block,
-    `> 引用助手消息（第 1 条）：\n> ${'a'.repeat(10)}\n> （摘录已截断，省略 20 字）\n`,
+    `> 引用bot消息：\n> ${'a'.repeat(10)}\n> （摘录已截断，省略 20 字）\n`,
   )
 })
 
 test('buildQuoteReplyBlock: en labels compose the same shape', () => {
   const block = logic.buildQuoteReplyBlock(
-    { role: 'assistant', position: 3, text: 'hello', streaming: false, draftNonEmpty: false, insertAtStart: true },
-    {
-      source: 'Quoted {role} message (#{position}{streaming}):',
-      roleUser: 'user',
-      roleAssistant: 'assistant',
-      streamingMark: ' · still being generated',
-      truncatedNote: '(excerpt truncated; {omitted} characters omitted)',
-    },
+    { role: 'assistant', text: 'hello', streaming: false, draftNonEmpty: false, insertAtStart: true },
+    EN_LABELS,
   )
-  assert.equal(block, '> Quoted assistant message (#3):\n> hello\n')
+  assert.equal(block, '> Quoted bot message:\n> hello\n')
 })
 
 test('insertQuoteIntoDraft: first accepted insert is a single capture/insert step', () => {
@@ -256,13 +301,13 @@ test('insertQuoteIntoDraft: appends beside existing draft text and reference chi
   }
   const outcome = logic.insertQuoteIntoDraft(target, () =>
     logic.buildQuoteReplyBlock(
-      { role: 'assistant', position: 1, text: 'quoted passage', streaming: false, draftNonEmpty: draft !== '', insertAtStart: draft.length === 0 },
+      { role: 'assistant', text: 'quoted passage', streaming: false, draftNonEmpty: draft !== '', insertAtStart: draft.length === 0 },
       ZH_LABELS,
     ),
   )
   assert.deepEqual(outcome, { ok: true, attempts: 1 })
   assert.equal(setDraftCalls, 0)
-  assert.ok(draft.startsWith(`${typed}${chipText}\n\n> 引用助手消息（第 1 条）：\n> quoted passage\n`))
+  assert.ok(draft.startsWith(`${typed}${chipText}\n\n> 引用bot消息：\n> quoted passage\n`))
   assert.ok(draft.includes(chipText), 'the pre-existing reference chip text must survive')
   assert.ok(draft.includes(typed), 'the pre-existing typed text must survive')
 })
