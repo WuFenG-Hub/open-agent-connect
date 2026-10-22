@@ -45,7 +45,7 @@ importers:
         version: 0.6.1
       bitcoinjs-lib:
         specifier: ^6.1.8
-        version: 6.1.8
+        version: 6.1.9
       crypto-js:
         specifier: ^4.2.0
         version: 4.2.0
@@ -88,7 +88,7 @@ importers:
         version: 5.0.6
       playwright:
         specifier: ^1.64.0
-        version: 1.64.0
+        version: 1.64.1
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
@@ -402,8 +402,8 @@ packages:
   bip39@3.1.0:
     resolution: {integrity: sha512-c9kiwdk45Do5GL0vJMe7tS95VjCii65mYAH7DfWl3uW8AVzXKQVUm64i3hzVybBDMp9r7j9iNxR85+ul8MdN/A==}
 
-  bitcoinjs-lib@6.1.8:
-    resolution: {integrity: sha512-A6o+yq7BvwlmLj4F0NC5f3XX109rRe5evxi368S9zil5voOtUfiqfiMCzZYKHk4k7iIJ3+NmcQW05Ar4CBlKyg==}
+  bitcoinjs-lib@6.1.9:
+    resolution: {integrity: sha512-En4bd8fh45xWJwRIxSPaGjoydr45BIQ0haKZBcKPQIJBPyB/wB+FJH+57dcWg2KD+k5hAV9Ii2uJksyAsT4tCg==}
     engines: {node: '>=8.0.0'}
 
   bitcore-lib@10.10.7:
@@ -897,13 +897,13 @@ packages:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
 
-  playwright-core@1.64.0:
-    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+  playwright-core@1.64.1:
+    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.64.0:
-    resolution: {integrity: sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg==}
+  playwright@1.64.1:
+    resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1170,7 +1170,7 @@ snapshots:
       assert: 2.1.0
       bip32: 4.0.0
       bip39: 3.1.0
-      bitcoinjs-lib: 6.1.8
+      bitcoinjs-lib: 6.1.9
       bitcore-lib: 10.10.7
       decimal.js: 10.6.0
       ecpair: 2.1.0
@@ -1462,7 +1462,7 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
-  bitcoinjs-lib@6.1.8:
+  bitcoinjs-lib@6.1.9:
     dependencies:
       '@noble/hashes': 1.8.0
       bech32: 2.0.0
@@ -2040,11 +2040,11 @@ snapshots:
 
   picomatch@2.3.2: {}
 
-  playwright-core@1.64.0: {}
+  playwright-core@1.64.1: {}
 
-  playwright@1.64.0:
+  playwright@1.64.1:
     dependencies:
-      playwright-core: 1.64.0
+      playwright-core: 1.64.1
 
   possible-typed-array-names@1.1.0: {}
 
