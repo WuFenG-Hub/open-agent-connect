@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdirSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 // Repo-mandated tracked temp root helper (tests/helpers/tempRoots.mjs):
 // any temp directory this file creates goes through it, and teardown is
 // registered for success, failure, and timeouts. The tests below never
@@ -206,6 +206,11 @@ test('filesystem hygiene: payload temp files self-clean and nothing else is writ
   // gate, bridge) writes nothing but the self-cleaning request payload that
   // runMetabotWithPayloadFile creates under os.tmpdir and removes in its
   // finally. Nothing here touches a real profile such as ~/.dsh.
+  // The payload dirs asserted below are derived from this test's own recorded
+  // CLI call args (dirname of each --request-file path), never by scanning
+  // global os.tmpdir(): node --test runs files as concurrent processes, so
+  // another file's in-flight oac-dsh-payload-* dir would leak into a global
+  // before/after snapshot diff and flake the suite (merge regression §5).
   const root = mkdtempTempRootSync('pchat-hygiene-')
   const { approval } = allowApproval()
   const { run, calls } = fakeRun()
@@ -213,15 +218,20 @@ test('filesystem hygiene: payload temp files self-clean and nothing else is writ
   const [tool] = plugin.buildPrivateChatToolDefinitions({
     host: host.ctx, hostAgent: { ctx: host.ctx }, approval, run,
   })
-  const payloadDirs = () =>
-    new Set(readdirSync(tmpdir()).filter((name) => name.startsWith('oac-dsh-payload-')))
-  const before = payloadDirs()
   for (let i = 0; i < 3; i += 1) {
     const ok = await tool.execute({ to: 'idq1peer', content: `msg ${i}` }, {})
     assert.match(ok, /Private message sent\./)
   }
   assert.equal(calls.length, 3)
-  const leaked = [...payloadDirs()].filter((name) => !before.has(name))
-  assert.deepEqual(leaked, [], 'every request payload temp dir must be removed after the run')
+  const payloadDirs = calls.map((call) => {
+    const flagIndex = call.args.indexOf('--request-file')
+    assert.ok(flagIndex >= 0, 'every send carries its payload on --request-file')
+    return dirname(call.args[flagIndex + 1])
+  })
+  assert.equal(new Set(payloadDirs).size, 3, 'each send runs in its own payload temp dir')
+  for (const dir of payloadDirs) {
+    assert.match(basename(dir), /^oac-dsh-payload-/, 'the request file lives in a payload temp dir')
+    assert.equal(existsSync(dir), false, `payload temp dir must be removed after the run: ${dir}`)
+  }
   assert.deepEqual(readdirSync(root), [], 'the send path writes nothing into the temp root')
 })
