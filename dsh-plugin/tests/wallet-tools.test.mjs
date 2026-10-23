@@ -286,6 +286,33 @@ test('wallet_transfer channel B without an approval surface: requires explicit a
   assert.equal(transferCalls[2].args.includes('--confirm'), true)
 })
 
+test('wallet_transfer approval policy "never" skips the dialog and requires external_confirmed', async () => {
+  const approval = {
+    request: async () => { throw new Error('the dialog must not spawn when prompts are disabled') },
+    overrideOf: () => 'never',
+  }
+  const { calls, run } = fakeRun()
+  const host = fakeHost()
+  const [, transfer] = buildTools(host, { approval, run })
+  const refused = await transfer.execute({ to: EXTERNAL_ADDRESS, amount: 0.5 }, {})
+  assert.match(refused, /external_confirmed: true/)
+  assert.match(refused, /Preview of the send:/)
+  assert.match(refused, /- amount: 0\.50000000 SPACE/)
+  const transferCalls = calls.filter((call) => call.args[1] === 'transfer')
+  assert.equal(transferCalls.length, 1, 'preview only, nothing broadcast')
+  assert.equal(transferCalls[0].args.includes('--confirm'), false)
+
+  const confirmed = await transfer.execute(
+    { to: EXTERNAL_ADDRESS, amount: 0.5, external_confirmed: true },
+    {},
+  )
+  assert.match(confirmed, /Transfer broadcast on-chain\./)
+  assert.match(confirmed, /channel: external \(owner-confirmed\)/)
+  const after = calls.filter((call) => call.args[1] === 'transfer')
+  assert.equal(after.length, 3, 'second leg previews then broadcasts')
+  assert.equal(after[2].args.includes('--confirm'), true, 'broadcast only after the explicit acknowledgement')
+})
+
 test('wallet_transfer without a session Bot slug refuses to spend', async () => {
   const host = fakeHost({ agentPresets: undefined })
   const { calls, run } = fakeRun()

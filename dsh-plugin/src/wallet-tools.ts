@@ -14,7 +14,7 @@
 import type { RunFn } from './cli-payload.js'
 import type { MetabotCommandResult } from './cli-bridge.js'
 import type { HostAgentLike, HostApproval, HostContext, HostToolDefinition, HostToolExec } from './context-types.js'
-import { approvalOf, oacSlugOf } from './browser-tools.js'
+import { approvalOf, oacSlugOf, sessionApprovalPolicy } from './browser-tools.js'
 
 const SATOSHI_PER_UNIT = 100_000_000
 /** MVC dust limit — mirrors the IDBots client-side fail-fast check. */
@@ -320,7 +320,12 @@ export function buildWalletToolDefinitions(input: {
         ...(previewData.currentBalance != null ? [`- current balance: ${String(previewData.currentBalance)}`] : []),
       ].join('\n')
 
-      if (approval) {
+      // Owner gate (same lineage as send_private_chat): with native prompts
+      // live the dialog asks; when prompts are disabled (approval/policy
+      // "never") or no approval surface exists at all, the owner's explicit
+      // in-conversation acknowledgement is the only path.
+      const policy = approval?.overrideOf?.(exec.agent?.session) ?? sessionApprovalPolicy(exec.agent)
+      if (approval && policy !== 'never') {
         const agent = exec.agent ?? hostAgent
         const reason = [
           `Send SPACE from this Bot's wallet to this external address? The transfer is broadcast on-chain and irreversible.`,
@@ -337,7 +342,8 @@ export function buildWalletToolDefinitions(input: {
           return `Owner declined the external transfer (${outcome}); nothing was sent. Do not retry the same send without the owner's explicit consent — for an in-conversation approval when no dialog can render, the owner must say so explicitly.`
         }
       } else if (args.external_confirmed !== true) {
-        // No owner dialog on this surface: require the same explicit
+        // No usable owner dialog (no approval surface, or prompts disabled
+        // by approval/policy "never"): require the same explicit
         // acknowledgement the RPC path accepts (IDBots R2 channel B).
         return 'Transfer refused: external sends require owner approval, and this surface renders no approval dialog. '
           + 'Ask the owner to approve the send in the conversation, then retry with `external_confirmed: true`. '
