@@ -162,7 +162,7 @@ export const METAWEB_BATCH_READ_CALIBER =
 export type MetawebBatchTruncationPoint = {
   pin_id: string;
   reason: 'trimmed' | 'omitted' | 'server_cap';
-  /** UTF-16 chars of body delivered in this output (0 for a whole-body omission). */
+  /** Body chars delivered in this output, counted in `unit` (0 for a whole-body omission). */
   kept_chars: number;
   /** The full body's UTF-16 chars; null when only the upstream-capped text is known (server_cap). */
   total_chars: number | null;
@@ -396,20 +396,21 @@ export function renderMetawebPinsBatch(
             total_bytes: Buffer.byteLength(slot.body, 'utf8'),
             unit: 'utf16-char',
           });
+        } else if (pin.truncated === true) {
+          // The upstream 8000-rune cap is a cut too, but only a whole-in-budget
+          // body records it: a body the host already trimmed or omitted records
+          // its host cut alone (one cut per pin — IDBots placement, so receipts
+          // stay identical across hosts).
+          truncationPoints.push({
+            pin_id: pin.pinId,
+            reason: 'server_cap',
+            kept_chars: Array.from(slot.body).length,
+            total_chars: pin.totalLength,
+            cut_at_bytes: Buffer.byteLength(slot.body, 'utf8'),
+            total_bytes: null,
+            unit: 'rune',
+          });
         }
-      }
-      if (pin.truncated === true) {
-        // The upstream 8000-rune cap is a cut too — record it separately so a
-        // whole-in-budget body is not mistaken for the full text.
-        truncationPoints.push({
-          pin_id: pin.pinId,
-          reason: 'server_cap',
-          kept_chars: slot.body.length,
-          total_chars: pin.totalLength,
-          cut_at_bytes: Buffer.byteLength(slot.body, 'utf8'),
-          total_bytes: null,
-          unit: 'rune',
-        });
       }
       sections.push(omit
         ? formatMetawebPinDetail(pin, { omitBody: true })

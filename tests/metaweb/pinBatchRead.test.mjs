@@ -174,6 +174,75 @@ test('renderMetawebPinsBatch records the upstream 8000-rune cap as a server_cap 
   assert.equal(serverCap.unit, 'rune');
 });
 
+test('renderMetawebPinsBatch: a host-trimmed capped body records only the trimmed cut, never server_cap too (IDBots parity)', () => {
+  // Three capped bodies (8000 chars each, upstream totalLength 9500) cannot
+  // all fit whole, so the water-fill trims every one. Each pin then records
+  // exactly one host `trimmed` point; the upstream cap stays invisible for a
+  // body the host already cut — one cut per pin, receipts identical to the
+  // IDBots renderer (cross-host receipt invariance).
+  const entries = {};
+  const ids = [];
+  for (let i = 0; i < 3; i += 1) {
+    const id = `tc${i}`;
+    ids.push(id);
+    entries[id] = batchPin({ pinId: id, text: 'q'.repeat(8_000), truncated: true, totalLength: 9_500 });
+  }
+  const { receipt } = renderMetawebPinsBatch(ids, entries);
+
+  assert.equal(receipt.truncation_points.length, 3, 'one point per pin, no server_cap double-dip');
+  assert.ok(receipt.truncation_points.every((point) => point.reason === 'trimmed'));
+  assert.equal(receipt.truncation_point_count, 3);
+  assert.equal(receipt.truncated, true);
+  for (const point of receipt.truncation_points) {
+    assert.equal(point.unit, 'utf16-char');
+    assert.ok(point.kept_chars < 8_000 && point.kept_chars >= 240, 'host cut actually trimmed the body above the floor');
+  }
+});
+
+test('renderMetawebPinsBatch: a host-omitted capped body records only the omitted cut, never server_cap too (IDBots parity)', () => {
+  // 24 capped bodies crowd each other below the 240-char floor, so the host
+  // drops them whole. Each records exactly one `omitted` point with
+  // kept_chars 0 — the upstream cap is invisible for these pins as well.
+  const entries = {};
+  const ids = [];
+  for (let i = 0; i < 24; i += 1) {
+    const id = `oc${i}`;
+    ids.push(id);
+    entries[id] = batchPin({ pinId: id, text: 'w'.repeat(8_000), truncated: true, totalLength: 9_500 });
+  }
+  const { receipt } = renderMetawebPinsBatch(ids, entries);
+
+  assert.equal(receipt.omitted, 24, 'all capped bodies crowded below the 240-char floor');
+  assert.equal(receipt.omitted + receipt.returned, 24);
+  assert.equal(receipt.truncation_point_count, 24, 'exactly one point per pin — no server_cap double-dip');
+  assert.equal(receipt.truncation_points.length, 12, 'visible list capped at 12 while the count stays exact');
+  assert.ok(
+    receipt.truncation_points.every((point) => point.reason === 'omitted'),
+    'no server_cap point rides a host-omitted body',
+  );
+  for (const point of receipt.truncation_points) {
+    assert.equal(point.kept_chars, 0);
+  }
+});
+
+test('renderMetawebPinsBatch: server_cap kept_chars counts runes, not UTF-16 units (IDBots parity)', () => {
+  // 4000 emoji = 8000 UTF-16 units but 4000 runes. A whole-in-budget capped
+  // body reports kept_chars in runes (Array.from), so the point must say 4000
+  // — UTF-16 length under unit:'rune' would overcount astral chars.
+  const capped = batchPin({
+    pinId: 'astral',
+    text: '😀'.repeat(4_000),
+    truncated: true,
+    totalLength: 5_000,
+  });
+  const { receipt } = renderMetawebPinsBatch(['astral'], { astral: capped });
+  const serverCap = receipt.truncation_points.find((point) => point.reason === 'server_cap');
+  assert.ok(serverCap, 'server_cap point recorded for the whole-in-budget capped body');
+  assert.equal(serverCap.unit, 'rune');
+  assert.equal(serverCap.kept_chars, 4_000, 'runes (Array.from length), not UTF-16 units (8000)');
+  assert.equal(serverCap.total_chars, 5_000);
+});
+
 test('renderMetawebPinsBatch fails loudly when even skeletons bust the budget', () => {
   const pins = {};
   const ids = [];
