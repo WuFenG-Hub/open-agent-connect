@@ -9,7 +9,8 @@ import { mkdtempTempRoot } from '../helpers/tempRoots.mjs';
 
 const require = createRequire(import.meta.url);
 const { assertBrowserHostConformance } = require('@openagentinternet/agent-browser-test-harness');
-const { createOacBrowserHostAdapter } = require('../../dist/daemon/browser/oacBrowserHostAdapter.js');
+const { createOacBrowserHostAdapter, OAC_BROWSER_OWNER_ACTOR_ID } = require('../../dist/daemon/browser/oacBrowserHostAdapter.js');
+const { createOwnerIdentity } = require('../../dist/core/owner/ownerIdentity.js');
 const { createMetabotProfile, createMetabotProfileFromIdentity, getMetabotProfile } = require('../../dist/core/bot/metabotProfileManager.js');
 const { commandFailed } = require('../../dist/core/contracts/commandResult.js');
 const { createConfigStore } = require('../../dist/core/config/configStore.js');
@@ -2535,4 +2536,369 @@ test('OAC browser host adapter reads and clears the selected profile MetaApp cac
   assert.equal(clearAll.ok, true);
   assert.equal(clearAll.data.clearedArtifacts, 0);
   assert.equal(clearAll.data.clearedPinRecords, 0);
+});
+
+// ---------------------------------------------------------------------------
+// ABC 0.7.1 Human/Bot Actor integration: the machine-wide human Owner identity
+// (~/.metabot/owner/identity.json) appears as a 'wallet'-kind Actor next to
+// the Bot Actors, with the Bot default preserved and strict authorization
+// isolation between identities.
+// ---------------------------------------------------------------------------
+
+test('OAC browser host adapter exposes the human Owner identity beside Bot actors with the Bot default preserved', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-runtime');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Owner Runtime Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18OwnerRuntime',
+  });
+  const owner = await createOwnerIdentity(systemHomeDir, { name: 'Owner Alice' });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+  });
+
+  const runtime = await adapter.getRuntime({});
+  assert.equal(runtime.ok, true);
+  const actorIds = runtime.data.actors.map((actor) => actor.id);
+  assert.deepEqual(actorIds, [OAC_BROWSER_OWNER_ACTOR_ID, active.slug]);
+  const ownerActor = runtime.data.actors[0];
+  assert.equal(ownerActor.kind, 'wallet');
+  assert.equal(ownerActor.label, 'Owner Alice');
+  assert.equal(ownerActor.globalMetaId, owner.globalMetaId);
+  assert.equal(ownerActor.isDefault, false);
+  assert.equal(runtime.data.defaultActor.id, active.slug);
+
+  // A tab carrying the Owner selection echoes the Owner Actor as the active
+  // chip without failing profile resolution.
+  const ownerSelection = await adapter.getRuntime({ actorId: OAC_BROWSER_OWNER_ACTOR_ID });
+  assert.equal(ownerSelection.ok, true);
+  assert.equal(ownerSelection.data.defaultActor.id, OAC_BROWSER_OWNER_ACTOR_ID);
+  assert.equal(ownerSelection.data.defaultActor.kind, 'wallet');
+
+  // Machine-scoped Browser surfaces still resolve with the Owner selected.
+  const settings = await adapter.getSettings({ actorId: OAC_BROWSER_OWNER_ACTOR_ID });
+  assert.equal(settings.ok, true);
+
+  // Forged or unknown Actor ids keep failing with profile_not_found.
+  const forged = await adapter.getRuntime({ actorId: 'forged-actor-id' });
+  assert.equal(forged.ok, false);
+  assert.equal(forged.code, 'profile_not_found');
+});
+
+test('OAC browser host adapter keeps a Bot-only runtime when no Owner identity exists', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-bot-only-runtime');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Bot Only Runtime Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18BotOnlyRuntime',
+  });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+  });
+
+  const runtime = await adapter.getRuntime({});
+  assert.equal(runtime.ok, true);
+  assert.deepEqual(runtime.data.actors.map((actor) => actor.kind), ['oac-bot']);
+  assert.equal(runtime.data.defaultActor.id, active.slug);
+});
+
+function ownerPinWritePayload() {
+  return {
+    operation: 'create',
+    path: '/protocols/simplebuzz',
+    encryption: '0',
+    version: '1.0.0',
+    contentType: 'application/json;utf-8',
+    payload: { encoding: 'utf8', value: '{"content":"hello from owner"}' },
+  };
+}
+
+test('OAC browser host adapter confirms and signs generic pin writes as the Owner identity', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-pin-write');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const calls = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Owner Write Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18OwnerWrite',
+  });
+  const owner = await createOwnerIdentity(systemHomeDir, { name: 'Owner Bob' });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    writeMetaIdPin: async (input) => {
+      calls.push(input);
+      return { ok: true, state: 'success', data: { pinId: 'pin-owner-write', txid: 'tx-owner-write' } };
+    },
+  });
+
+  const phase1 = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://bridge-app',
+    kind: 'metaid-pin-write',
+    payload: ownerPinWritePayload(),
+  });
+  assert.equal(phase1.state, 'manual_action_required');
+  assert.deepEqual(calls, []);
+  // The confirmation card names the identity that will actually sign.
+  assert.deepEqual(phase1.data.confirmation.actor, {
+    uri: `metaid://${owner.globalMetaId}`,
+    globalMetaId: owner.globalMetaId,
+    name: 'Owner Bob (Owner)',
+  });
+
+  const result = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: phase1.data.confirmRequest.resourceUri,
+    kind: phase1.data.confirmRequest.kind,
+    payload: phase1.data.confirmRequest.payload,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].actorId, OAC_BROWSER_OWNER_ACTOR_ID);
+  assert.equal(result.data.data.pinId, 'pin-owner-write');
+  // The success result carries the actual signer identity.
+  assert.equal(result.data.data.actor.name, 'Owner Bob (Owner)');
+  assert.equal(result.data.data.actor.globalMetaId, owner.globalMetaId);
+});
+
+test('OAC browser host adapter fails a pin-write confirmation replay after an Actor switch', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-switch');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const calls = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Switch Isolation Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18SwitchIsolation',
+  });
+  await createOwnerIdentity(systemHomeDir, { name: 'Owner Carol' });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    writeMetaIdPin: async (input) => {
+      calls.push(input);
+      return { ok: true, state: 'success', data: { pinId: 'pin-switched', txid: 'tx-switched' } };
+    },
+  });
+
+  // Confirm as the Owner, then replay the confirmation as the Bot.
+  const ownerPhase = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://bridge-app',
+    kind: 'metaid-pin-write',
+    payload: ownerPinWritePayload(),
+  });
+  const replayAsBot = await adapter.runTrustedAction({
+    actorId: active.slug,
+    resourceUri: ownerPhase.data.confirmRequest.resourceUri,
+    kind: ownerPhase.data.confirmRequest.kind,
+    payload: ownerPhase.data.confirmRequest.payload,
+  });
+  assert.equal(replayAsBot.state, 'manual_action_required');
+  assert.deepEqual(calls, []);
+  // The re-issued card names the newly selected identity, never the stale one.
+  assert.equal(replayAsBot.data.confirmation.actor.globalMetaId, LOCAL_GLOBAL_META_ID);
+  assert.equal(replayAsBot.data.confirmation.actor.name, 'Switch Isolation Bot');
+
+  // Confirm as the Bot, then replay as the Owner.
+  const botPhase = await adapter.runTrustedAction({
+    actorId: active.slug,
+    resourceUri: 'metaapp://bridge-app',
+    kind: 'metaid-pin-write',
+    payload: ownerPinWritePayload(),
+  });
+  const replayAsOwner = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: botPhase.data.confirmRequest.resourceUri,
+    kind: botPhase.data.confirmRequest.kind,
+    payload: botPhase.data.confirmRequest.payload,
+  });
+  assert.equal(replayAsOwner.state, 'manual_action_required');
+  assert.deepEqual(calls, []);
+  assert.equal(replayAsOwner.data.confirmation.actor.name, 'Owner Carol (Owner)');
+});
+
+test('OAC browser host adapter keeps session permission grants bound to the selecting identity', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-grants');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const calls = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Grant Isolation Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18GrantIsolation',
+  });
+  await createOwnerIdentity(systemHomeDir, { name: 'Owner Eve' });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    writeMetaIdPin: async (input) => {
+      calls.push(input);
+      return { ok: true, state: 'success', data: { pinId: 'pin-granted', txid: 'tx-granted' } };
+    },
+  });
+  const grantPayload = {
+    grants: [{ method: 'metaid.pin.write', operation: 'create', path: '/protocols/simplegroupchat' }],
+  };
+  const ownerBase = {
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://grant-app',
+    sessionId: 'page-owner',
+  };
+
+  // Grant as the Owner, then confirm the Owner write works (positive control).
+  const grantPhase = await adapter.runTrustedAction({
+    ...ownerBase,
+    kind: 'permissions-request',
+    payload: grantPayload,
+  });
+  assert.equal(grantPhase.state, 'manual_action_required');
+  assert.equal(grantPhase.data.confirmation.actor.name, 'Owner Eve (Owner)');
+  const approved = await adapter.runTrustedAction({
+    ...ownerBase,
+    kind: grantPhase.data.confirmRequest.kind,
+    payload: grantPhase.data.confirmRequest.payload,
+  });
+  assert.equal(approved.ok, true);
+
+  const ownerWrite = await adapter.runTrustedAction({
+    ...ownerBase,
+    kind: 'metaid-pin-write',
+    payload: {
+      operation: 'create', path: '/protocols/simplegroupchat', encryption: '0', version: '1.0.0',
+      contentType: 'application/json', payload: { encoding: 'utf8', value: '{"move":"e2e4"}' },
+    },
+  });
+  assert.equal(ownerWrite.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].actorId, OAC_BROWSER_OWNER_ACTOR_ID);
+
+  // The same session grant must NOT authorize a write as the Bot.
+  const botWrite = await adapter.runTrustedAction({
+    actorId: active.slug,
+    resourceUri: 'metaapp://grant-app',
+    sessionId: 'page-owner',
+    kind: 'metaid-pin-write',
+    payload: {
+      operation: 'create', path: '/protocols/simplegroupchat', encryption: '0', version: '1.0.0',
+      contentType: 'application/json', payload: { encoding: 'utf8', value: '{"move":"e7e5"}' },
+    },
+  });
+  assert.equal(botWrite.state, 'manual_action_required');
+  assert.equal(calls.length, 1);
+  assert.equal(botWrite.data.confirmation.actor.name, 'Grant Isolation Bot');
+});
+
+test('OAC browser host adapter fails explicitly when the selected Owner identity is missing', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-missing');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const calls = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Owner Missing Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18OwnerMissing',
+  });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    writeMetaIdPin: async (input) => {
+      calls.push(input);
+      return { ok: true, state: 'success', data: { pinId: 'pin-should-not-happen', txid: 'tx-no' } };
+    },
+  });
+
+  // No Owner identity exists on this machine: selecting it must error instead
+  // of silently signing as a Bot.
+  const write = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://bridge-app',
+    kind: 'metaid-pin-write',
+    payload: ownerPinWritePayload(),
+  });
+  assert.equal(write.state, 'manual_action_required');
+  assert.equal(write.code, 'actor_required');
+  assert.deepEqual(calls, []);
+
+  // A stale Owner selection in a tab falls back to the machine-default Bot
+  // Actor for the runtime list instead of failing the page.
+  const runtime = await adapter.getRuntime({ actorId: OAC_BROWSER_OWNER_ACTOR_ID });
+  assert.equal(runtime.ok, true);
+  assert.deepEqual(runtime.data.actors.map((actor) => actor.kind), ['oac-bot']);
+  assert.equal(runtime.data.defaultActor.id, active.slug);
+});
+
+test('OAC browser host adapter rejects Bot-only surfaces for the Owner identity', async (t) => {
+  const profileHome = await createProfileHome('oac-browser-adapter-owner-bot-only');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const chatCalls = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Bot Surface Bot',
+    homeDir: profileHome,
+    globalMetaId: LOCAL_GLOBAL_META_ID,
+    mvcAddress: '18BotSurface',
+  });
+  await createOwnerIdentity(systemHomeDir, { name: 'Owner Frank' });
+  const adapter = await createAdapter({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    privateChat: async (request) => {
+      chatCalls.push(request);
+      return { ok: true, state: 'success', data: {} };
+    },
+  });
+
+  const chat = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://chat',
+    kind: 'private-chat',
+    payload: { to: PEER_GLOBAL_META_ID, content: 'hello' },
+  });
+  assert.equal(chat.ok, false);
+  assert.equal(chat.code, 'unsupported_actor');
+  assert.deepEqual(chatCalls, []);
+
+  const session = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://game',
+    kind: 'app-session-start',
+    payload: {
+      appId: 'app-1', sessionType: 'agent-game', groupId: 'g1', gameId: 'game-1',
+      manifestUri: 'metaapp://game/manifest', rulesHash: 'r1', seat: '1',
+      agentId: 'idq1ownerfrank',
+    },
+  });
+  assert.equal(session.ok, false);
+  assert.equal(session.code, 'unsupported_actor');
+
+  const conversation = await adapter.runTrustedAction({
+    actorId: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: `map://simplemsg/conversation?peer=${PEER_GLOBAL_META_ID}`,
+    kind: 'open-conversation',
+    payload: { peerGlobalMetaId: PEER_GLOBAL_META_ID },
+  });
+  assert.equal(conversation.ok, false);
+  assert.equal(conversation.code, 'unsupported_actor');
 });

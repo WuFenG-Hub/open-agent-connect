@@ -70,6 +70,7 @@ import {
 } from '../../core/metaapp/artifactCache';
 import { resolveMetaAppArtifact } from '../../core/metaapp/artifactDownload';
 import type { createMetaAppPreviewSessionRegistry } from '../../core/metaapp/previewSessions';
+import { readOwnerIdentity, type OwnerIdentityRecord } from '../../core/owner/ownerIdentity';
 import {
   DEFAULT_AGENT_GAME_PROTOCOL_PATHS,
   type AppSessionError,
@@ -81,6 +82,18 @@ type MetaAppPreviewSessions = ReturnType<typeof createMetaAppPreviewSessionRegis
 type OacBrowserActionHandler = (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
 type OacMetaIdPinWriteOperation = 'create' | 'modify' | 'revoke';
 type OacMetaIdPinWritePayloadEncoding = 'utf-8' | 'base64';
+
+/**
+ * Stable host-local Actor id for the machine-wide human Owner identity
+ * (~/.metabot/owner/identity.json). Actor ids — not display names — drive
+ * selection and signing, so this constant must never collide with how the
+ * resolution paths treat Bot profile slugs: the Owner branch is checked
+ * BEFORE profile resolution everywhere. OAC's human identity maps to the
+ * existing 'wallet' Actor kind (a mnemonic-derived, wallet-backed MetaID —
+ * the same semantic the standalone host uses), so no ABC contract extension
+ * is required; the Browser UI renders it with the shared Human badge.
+ */
+export const OAC_BROWSER_OWNER_ACTOR_ID = 'oac-owner';
 
 /** The daemon-owned app session runtime surface the bridge may call. */
 export interface OacAppSessionHost {
@@ -543,6 +556,46 @@ function profileToMetaAppBridgeActor(profile: MetabotProfileFull): OacBrowserMet
     uri: `metaid://${globalMetaId}`,
     globalMetaId,
     name: normalizeText(profile.name) || profile.slug,
+  };
+}
+
+/**
+ * The human Owner identity as a runtime Browser Actor. Only sanitized display
+ * fields ride along (label, globalMetaId, avatar); never the mnemonic, keys,
+ * or file paths. capabilities stays empty like the IDBots reference host —
+ * capability claims are not consumed by the shared UI for gating.
+ */
+function ownerToBrowserActor(owner: OwnerIdentityRecord): BrowserActor | null {
+  const globalMetaId = normalizeText(owner.globalMetaId);
+  if (!globalMetaId) {
+    return null;
+  }
+  return {
+    id: OAC_BROWSER_OWNER_ACTOR_ID,
+    label: normalizeText(owner.name) || 'Owner',
+    kind: 'wallet',
+    globalMetaId,
+    ...(owner.avatarDataUrl ? { avatar: owner.avatarDataUrl } : {}),
+    isDefault: false,
+    capabilities: [],
+  };
+}
+
+/**
+ * The human Owner identity as the sanitized bridge Actor shown on
+ * confirmation cards and write results. The "(Owner)" suffix keeps the
+ * confirmation card unambiguous when a Bot shares the owner's display name;
+ * no Actor kind, signer details, or secrets are added to the bridge shape.
+ */
+function ownerToMetaAppBridgeActor(owner: OwnerIdentityRecord): OacBrowserMetaAppBridgeActor | null {
+  const globalMetaId = normalizeText(owner.globalMetaId);
+  if (!globalMetaId) {
+    return null;
+  }
+  return {
+    uri: `metaid://${globalMetaId}`,
+    globalMetaId,
+    name: `${normalizeText(owner.name) || 'Owner'} (Owner)`,
   };
 }
 
@@ -1188,12 +1241,35 @@ export function createOacBrowserHostAdapter(input: CreateOacBrowserHostAdapterIn
   async function resolveActor(
     actorInput?: BrowserActorInput & { from?: string },
   ): Promise<OacBrowserActorContext | { failure: MetabotCommandResult<never> }> {
-    return input.resolveActorWriteContext(actorSelector(actorInput));
+    const selector = actorSelector(actorInput);
+    // Settings, cache, and resource resolution are machine-scoped browser
+    // context, not identity context: the Owner identity has no profile home,
+    // so it resolves to the machine default exactly like an unselected tab.
+    // Identity-scoped routing happens in resolveMetaAppBridgeActor and the
+    // daemon signing handlers, which re-read the selected Actor at execution
+    // time.
+    return input.resolveActorWriteContext(selector === OAC_BROWSER_OWNER_ACTOR_ID ? '' : selector);
   }
 
   async function resolveMetaAppBridgeActor(
     actorInput?: BrowserActorInput & { from?: string },
   ): Promise<{ actor: OacBrowserMetaAppBridgeActor; actorId: string } | { failure: BrowserCommandResult<BrowserTrustedActionResult> }> {
+    const selector = actorSelector(actorInput);
+    if (selector === OAC_BROWSER_OWNER_ACTOR_ID) {
+      // Re-read the Owner identity at execution time: a deleted or replaced
+      // Owner must fail explicitly instead of falling back to a Bot signer.
+      const owner = await readOwnerIdentity(input.systemHomeDir).catch(() => null);
+      const ownerActor = owner ? ownerToMetaAppBridgeActor(owner) : null;
+      if (!owner || !ownerActor) {
+        return {
+          failure: browserManualActionRequired(
+            'actor_required',
+            'The selected Owner identity is not available on this machine. Restore it in Settings or select a Bot Actor.',
+          ),
+        };
+      }
+      return { actor: ownerActor, actorId: OAC_BROWSER_OWNER_ACTOR_ID };
+    }
     const actor = await resolveActor(actorInput);
     if ('failure' in actor) {
       const code = mapPinWriteFailureCode(browserFailureCode(actor.failure));
@@ -1611,20 +1687,43 @@ export function createOacBrowserHostAdapter(input: CreateOacBrowserHostAdapterIn
   async function getRuntime(runtimeInput: BrowserRuntimeInput & { from?: string } = {}): Promise<BrowserCommandResult<BrowserRuntimeSnapshot>> {
     const requestedActor = actorSelector(runtimeInput);
     const activeHomeDir = path.resolve(input.homeDir);
-    const profiles = await listMetabotProfiles(input.systemHomeDir).catch(() => [] as MetabotProfileFull[]);
-    const selectedProfile = requestedActor
-      ? profiles.find((profile) => profile.slug === requestedActor) ?? null
-      : profiles.find((profile) => path.resolve(profile.homeDir) === activeHomeDir) ?? profiles[0] ?? null;
+    const [profiles, owner] = await Promise.all([
+      listMetabotProfiles(input.systemHomeDir).catch(() => [] as MetabotProfileFull[]),
+      readOwnerIdentity(input.systemHomeDir).catch(() => null),
+    ]);
+    const ownerActor = owner ? ownerToBrowserActor(owner) : null;
+    const isOwnerRequest = requestedActor === OAC_BROWSER_OWNER_ACTOR_ID;
 
-    if (requestedActor && !selectedProfile) {
-      return browserFailure('profile_not_found', `MetaBot profile not found: ${requestedActor}`);
+    // The existing Bot default (Twin Bot first, then the daemon startup home)
+    // is preserved whenever it can be resolved — adding a human Actor must
+    // not change the default selection. An Owner request echoes the Owner
+    // Actor as the active chip while it exists; a stale Owner request (the
+    // identity was deleted) falls back to the machine-default Bot so the
+    // page still renders a selectable list instead of failing.
+    let selectedProfile: MetabotProfileFull | null;
+    if (requestedActor && !isOwnerRequest) {
+      selectedProfile = profiles.find((profile) => profile.slug === requestedActor) ?? null;
+      if (!selectedProfile) {
+        return browserFailure('profile_not_found', `MetaBot profile not found: ${requestedActor}`);
+      }
+    } else if (!requestedActor || (isOwnerRequest && !ownerActor)) {
+      selectedProfile = profiles.find((profile) => path.resolve(profile.homeDir) === activeHomeDir) ?? profiles[0] ?? null;
+    } else {
+      selectedProfile = null;
     }
 
     const selectedHomeDir = selectedProfile ? path.resolve(selectedProfile.homeDir) : '';
-    const actors = profiles.map((profile) => profileToBrowserActor(profile, selectedHomeDir));
-    const defaultActor = selectedProfile
-      ? actors.find((actor) => actor.id === selectedProfile.slug) ?? null
-      : null;
+    const botActors = profiles.map((profile) => profileToBrowserActor(profile, selectedHomeDir));
+    const actors = ownerActor ? [ownerActor, ...botActors] : botActors;
+    let defaultActor: BrowserActor | null = null;
+    if (isOwnerRequest && ownerActor) {
+      defaultActor = ownerActor;
+    } else if (selectedProfile) {
+      defaultActor = botActors.find((actor) => actor.id === selectedProfile.slug) ?? null;
+    }
+    if (ownerActor) {
+      ownerActor.isDefault = defaultActor?.id === ownerActor.id;
+    }
 
     return browserSuccess({
       host: {
@@ -2219,6 +2318,21 @@ export function createOacBrowserHostAdapter(input: CreateOacBrowserHostAdapterIn
   ): Promise<BrowserCommandResult<BrowserTrustedActionResult>> {
     if (actionInput.kind === 'copy-uri') {
       return copyUriTrustedActionResult(actionInput);
+    }
+
+    // The human Owner identity signs generic pin writes and uploads, but it
+    // is not a Bot: chat, service calls, conversations, and agent-game
+    // sessions are Bot-only surfaces. They must fail explicitly here instead
+    // of silently resolving to another identity.
+    if (actorSelector(actionInput) === OAC_BROWSER_OWNER_ACTOR_ID
+      && (actionInput.kind === 'private-chat'
+        || actionInput.kind === 'service-call'
+        || actionInput.kind === 'open-conversation'
+        || String(actionInput.kind).startsWith('app-session-'))) {
+      return browserFailure(
+        'unsupported_actor',
+        `The selected Owner identity does not support ${String(actionInput.kind)}; select a Bot Actor.`,
+      );
     }
 
     if ((actionInput.kind as string) === 'metafile-upload') {
