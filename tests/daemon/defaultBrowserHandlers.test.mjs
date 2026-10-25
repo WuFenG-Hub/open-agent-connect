@@ -6,7 +6,9 @@ import { cleanupProfileHome, createProfileHome, deriveSystemHome } from '../help
 
 const require = createRequire(import.meta.url);
 const { createDefaultMetabotDaemonHandlers } = require('../../dist/daemon/defaultHandlers.js');
+const { OAC_BROWSER_OWNER_ACTOR_ID } = require('../../dist/daemon/browser/oacBrowserHostAdapter.js');
 const { createMetabotProfile, createMetabotProfileFromIdentity } = require('../../dist/core/bot/metabotProfileManager.js');
+const { createOwnerIdentity } = require('../../dist/core/owner/ownerIdentity.js');
 const { createConfigStore } = require('../../dist/core/config/configStore.js');
 const { createInfrastructureConfigStore } = require('../../dist/core/config/infrastructureConfigStore.js');
 
@@ -333,4 +335,117 @@ test('Browser trusted metaid-pin-write uses the selected signer after confirmati
       },
     },
   });
+});
+
+test('Browser trusted metaid-pin-write signs as the human Owner identity and keeps switch isolation', async (t) => {
+  const profileHome = await createProfileHome('browser-owner-pin-write');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+  const botWrites = [];
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Owner Daemon Bot',
+    homeDir: profileHome,
+    globalMetaId: 'idq1ownerdaemonbot',
+    mvcAddress: '18OwnerDaemonBot',
+  });
+  const owner = await createOwnerIdentity(systemHomeDir, { name: 'Owner Dana' });
+  const handlers = createDefaultMetabotDaemonHandlers({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    getDaemonRecord: () => null,
+    signer: makeSigner(async (input) => {
+      botWrites.push(input);
+      return {
+        pinId: 'pin-bot-daemon',
+        txids: ['tx-bot-daemon'],
+        totalCost: 1,
+        network: input.network,
+        operation: input.operation,
+        path: input.path,
+        globalMetaId: 'idq1ownerdaemonbot',
+        mvcAddress: '18OwnerDaemonBot',
+      };
+    }),
+    adapters: new Map([['mvc', {
+      network: 'mvc',
+      deriveAddress: async () => owner.mvcAddress,
+      buildInscription: async () => ({ signedRawTxs: ['00owner'], revealIndices: [0], totalCost: 1 }),
+      broadcastTx: async () => 'tx-owner-daemon',
+    }]]),
+  });
+
+  const ownerWritePayload = {
+    operation: 'create',
+    path: '/protocols/simplebuzz',
+    encryption: '0',
+    version: '1.0.0',
+    contentType: 'application/json',
+    payload: { encoding: 'utf8', value: '{"content":"owner hello"}' },
+  };
+
+  const preview = await handlers.browser.runTrustedAction({
+    from: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://owner-app',
+    kind: 'metaid-pin-write',
+    payload: ownerWritePayload,
+  });
+  assert.equal(preview.ok, false);
+  assert.equal(preview.state, 'manual_action_required');
+  assert.equal(preview.data.confirmation.actor.name, 'Owner Dana (Owner)');
+  assert.equal(preview.data.confirmation.actor.globalMetaId, owner.globalMetaId);
+
+  const result = await handlers.browser.runTrustedAction({
+    from: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: preview.data.confirmRequest.resourceUri,
+    kind: preview.data.confirmRequest.kind,
+    payload: preview.data.confirmRequest.payload,
+  });
+  assert.equal(result.ok, true);
+  // The owner signer (fake MVC adapter) produced the pin, not the Bot signer.
+  assert.equal(result.data.data.pinId, 'tx-owner-daemoni0');
+  assert.equal(result.data.data.actor.name, 'Owner Dana (Owner)');
+  assert.deepEqual(botWrites, []);
+
+  // A confirmation minted for the Owner must not authorize a Bot write after
+  // the tab switches identities.
+  const secondPreview = await handlers.browser.runTrustedAction({
+    from: OAC_BROWSER_OWNER_ACTOR_ID,
+    resourceUri: 'metaapp://owner-app',
+    kind: 'metaid-pin-write',
+    payload: ownerWritePayload,
+  });
+  const replayAsBot = await handlers.browser.runTrustedAction({
+    from: active.slug,
+    resourceUri: secondPreview.data.confirmRequest.resourceUri,
+    kind: secondPreview.data.confirmRequest.kind,
+    payload: secondPreview.data.confirmRequest.payload,
+  });
+  assert.equal(replayAsBot.ok, false);
+  assert.equal(replayAsBot.state, 'manual_action_required');
+  assert.deepEqual(botWrites, []);
+});
+
+test('Browser context keeps usingIdentities Bot-only when a human Owner identity exists', async (t) => {
+  const profileHome = await createProfileHome('browser-owner-context');
+  t.after(async () => cleanupProfileHome(profileHome));
+  const systemHomeDir = deriveSystemHome(profileHome);
+
+  const active = await createMetabotProfileFromIdentity(systemHomeDir, {
+    name: 'Owner Context Bot',
+    homeDir: profileHome,
+    globalMetaId: 'idq1ownercontextbot',
+    mvcAddress: '18OwnerContextBot',
+  });
+  await createOwnerIdentity(systemHomeDir, { name: 'Owner Erin' });
+  const handlers = createDefaultMetabotDaemonHandlers({
+    homeDir: active.homeDir,
+    systemHomeDir,
+    getDaemonRecord: () => null,
+  });
+
+  const context = await handlers.browser.getContext({});
+  assert.equal(context.ok, true);
+  assert.deepEqual(context.data.usingIdentities.map((identity) => identity.slug), [active.slug]);
+  assert.equal(context.data.defaultUsingIdentity.slug, active.slug);
 });

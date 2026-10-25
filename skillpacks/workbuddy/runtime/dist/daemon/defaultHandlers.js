@@ -96,6 +96,7 @@ const uploadFile_1 = require("../core/files/uploadFile");
 const trafficAccountService_1 = require("../core/traffic/trafficAccountService");
 const trafficStore_1 = require("../core/traffic/trafficStore");
 const ownerIdentity_1 = require("../core/owner/ownerIdentity");
+const ownerSigner_1 = require("../core/owner/ownerSigner");
 const ownerBinding_1 = require("../core/owner/ownerBinding");
 const ownerOnboarding_1 = require("../core/owner/ownerOnboarding");
 const mvcSponsorWritePin_1 = require("../core/subsidy/mvcSponsorWritePin");
@@ -10795,6 +10796,53 @@ function createDefaultMetabotDaemonHandlers(input) {
             console.warn('[app-session group listener]', error.message);
         },
     });
+    /**
+     * Execution-time signer resolution for Browser trusted actions. The Owner
+     * branch re-reads ~/.metabot/owner/identity.json and rebuilds the signer on
+     * every call — a replaced Owner mnemonic must never keep signing through a
+     * cached signer while the confirmation card shows the new identity. The Bot
+     * branch preserves the resolveActorWriteContext routing unchanged.
+     */
+    async function resolveBrowserSigningIdentity(actorId) {
+        const requestedActor = normalizeText(actorId);
+        if (requestedActor === oacBrowserHostAdapter_1.OAC_BROWSER_OWNER_ACTOR_ID) {
+            const owner = await (0, ownerIdentity_1.readOwnerIdentity)(normalizedSystemHomeDir).catch(() => null);
+            if (!owner || !normalizeText(owner.globalMetaId)) {
+                return {
+                    failure: (0, commandResult_1.commandManualActionRequired)('actor_required', 'The selected Owner identity is not available on this machine. Restore it in Settings or select a Bot Actor.'),
+                };
+            }
+            return {
+                signer: (0, ownerSigner_1.createOwnerSigner)({
+                    systemHomeDir: normalizedSystemHomeDir,
+                    owner,
+                    adapters,
+                    resolveSponsorWritePin,
+                }),
+                bridgeActor: {
+                    uri: `metaid://${owner.globalMetaId}`,
+                    globalMetaId: owner.globalMetaId,
+                    name: `${normalizeText(owner.name) || 'Owner'} (Owner)`,
+                },
+                network: await resolveDefaultWriteNetwork(),
+            };
+        }
+        const actor = await resolveActorWriteContext(requestedActor);
+        if ('failure' in actor) {
+            return { failure: actor.failure };
+        }
+        const bridgeActor = await resolveBrowserBridgeActorForHome(actor.homeDir);
+        if (!bridgeActor) {
+            return {
+                failure: (0, commandResult_1.commandManualActionRequired)('actor_required', 'A selected MetaID Actor Bot with a Global MetaID is required.'),
+            };
+        }
+        return {
+            signer: actor.signer,
+            bridgeActor,
+            network: await resolveWriteNetworkForHome(undefined, actor.homeDir),
+        };
+    }
     const browserHostAdapterInput = {
         homeDir: input.homeDir,
         systemHomeDir: normalizedSystemHomeDir,
@@ -10808,18 +10856,13 @@ function createDefaultMetabotDaemonHandlers(input) {
             : (0, commandResult_1.commandFailed)('not_implemented', 'Service call handler is not configured.'),
         writeMetaIdPin: async ({ actorId, request }) => {
             try {
-                const actor = await resolveActorWriteContext(actorId);
-                if ('failure' in actor) {
-                    return actor.failure;
+                const identity = await resolveBrowserSigningIdentity(actorId);
+                if ('failure' in identity) {
+                    return identity.failure;
                 }
-                const bridgeActor = await resolveBrowserBridgeActorForHome(actor.homeDir);
-                if (!bridgeActor) {
-                    return (0, commandResult_1.commandManualActionRequired)('actor_required', 'A selected MetaID Actor Bot with a Global MetaID is required.');
-                }
-                const network = await resolveWriteNetworkForHome(undefined, actor.homeDir);
-                const result = await actor.signer.writePin({
+                const result = await identity.signer.writePin({
                     ...request,
-                    network,
+                    network: identity.network,
                 });
                 return (0, commandResult_1.commandSuccess)({
                     pinId: result.pinId,
@@ -10827,7 +10870,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                     txids: result.txids,
                     operation: request.operation,
                     path: result.path,
-                    actor: bridgeActor,
+                    actor: identity.bridgeActor,
                 });
             }
             catch (error) {
@@ -10836,23 +10879,18 @@ function createDefaultMetabotDaemonHandlers(input) {
         },
         uploadMetaFile: async ({ actorId, request }) => {
             try {
-                const actor = await resolveActorWriteContext(actorId);
-                if ('failure' in actor) {
-                    return actor.failure;
+                const identity = await resolveBrowserSigningIdentity(actorId);
+                if ('failure' in identity) {
+                    return identity.failure;
                 }
-                const bridgeActor = await resolveBrowserBridgeActorForHome(actor.homeDir);
-                if (!bridgeActor) {
-                    return (0, commandResult_1.commandManualActionRequired)('actor_required', 'A selected MetaID Actor Bot with a Global MetaID is required.');
-                }
-                const network = await resolveWriteNetworkForHome(undefined, actor.homeDir);
                 const files = [];
                 for (const entry of request.entries) {
                     const uploaded = await (0, uploadFile_1.uploadFileBufferToChain)({
-                        signer: actor.signer,
+                        signer: identity.signer,
                         fileName: entry.name || 'upload',
                         data: entry.data,
                         contentType: entry.contentType || undefined,
-                        network,
+                        network: identity.network,
                     });
                     files.push({
                         pinId: uploaded.pinId,
@@ -10860,7 +10898,7 @@ function createDefaultMetabotDaemonHandlers(input) {
                         name: uploaded.fileName,
                         size: uploaded.bytes,
                         contentType: uploaded.contentType,
-                        actor: bridgeActor,
+                        actor: identity.bridgeActor,
                     });
                 }
                 return (0, commandResult_1.commandSuccess)({ files });

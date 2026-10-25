@@ -7,6 +7,17 @@ type MetaAppPreviewSessions = ReturnType<typeof createMetaAppPreviewSessionRegis
 type OacBrowserActionHandler = (input: Record<string, unknown>) => Promise<MetabotCommandResult<unknown>>;
 type OacMetaIdPinWriteOperation = 'create' | 'modify' | 'revoke';
 type OacMetaIdPinWritePayloadEncoding = 'utf-8' | 'base64';
+/**
+ * Stable host-local Actor id for the machine-wide human Owner identity
+ * (~/.metabot/owner/identity.json). Actor ids — not display names — drive
+ * selection and signing, so this constant must never collide with how the
+ * resolution paths treat Bot profile slugs: the Owner branch is checked
+ * BEFORE profile resolution everywhere. OAC's human identity maps to the
+ * existing 'wallet' Actor kind (a mnemonic-derived, wallet-backed MetaID —
+ * the same semantic the standalone host uses), so no ABC contract extension
+ * is required; the Browser UI renders it with the shared Human badge.
+ */
+export declare const OAC_BROWSER_OWNER_ACTOR_ID = "oac-owner";
 /** The daemon-owned app session runtime surface the bridge may call. */
 export interface OacAppSessionHost {
     validateStart(input: AppSessionStartParams & {
