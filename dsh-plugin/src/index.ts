@@ -17,6 +17,7 @@ import {
 } from './browser-tools.js'
 import { bindMetawebToolInstall } from './metaweb-tools.js'
 import { bindDiscoveryToolInstall } from './discovery-tools.js'
+import { bindMetataskToolInstall } from './metatask-tools.js'
 import { BotChangeEventHub, streamBotEvents, watchBotRegistry } from './bot-events.js'
 import { bindSkillToolInstall } from './skill-tools.js'
 import { bindSimpleNoteToolInstall } from './simplenote-tools.js'
@@ -882,6 +883,7 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   bindBrowserToolInstall(ctx, browserHub, sourceCache)
   bindMetawebToolInstall(ctx)
   bindDiscoveryToolInstall(ctx)
+  bindMetataskToolInstall(ctx)
   bindSkillToolInstall(ctx)
   bindSimpleNoteToolInstall(ctx)
   bindBuzzToolInstall(ctx)
