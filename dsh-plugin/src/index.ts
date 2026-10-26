@@ -29,6 +29,7 @@ import { bindQaToolInstall } from './qa-tools.js'
 import { bindPrivateChatToolInstall } from './private-chat-tools.js'
 import { bindCommentToolInstall } from './comment-tools.js'
 import { bindOmniCastToolInstall } from './omni-cast-tools.js'
+import { bindGroupChatToolInstall } from './group-chat-tools.js'
 import { bindMetaprotocolToolInstall } from './metaprotocol-tools.js'
 import { bindSurfToolInstall } from './surf-tools.js'
 import { dispatchSurfRoutes } from './surf-routes.js'
@@ -897,6 +898,7 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   bindPrivateChatToolInstall(ctx)
   bindCommentToolInstall(ctx)
   bindOmniCastToolInstall(ctx)
+  bindGroupChatToolInstall(ctx)
   bindMetaprotocolToolInstall(ctx)
   bindSurfToolInstall(ctx)
   bindKnowledgeBaseToolInstall(ctx)
