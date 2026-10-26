@@ -35,6 +35,9 @@ export interface CliDependencies {
     buzz?: {
         post?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     };
+    comment?: {
+        pin?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+    };
     simplenote?: {
         post?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     };
@@ -90,6 +93,7 @@ export interface CliDependencies {
     metaweb?: {
         search?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         read?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        batchRead?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
     };
     chain?: {
         write?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
@@ -249,6 +253,8 @@ export interface CliDependencies {
     };
     chat?: {
         private?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        groupJoin?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
+        groupSend?: (input: Record<string, unknown>) => Awaitable<MetabotCommandResult<unknown>>;
         interim?: (input: {
             turnFile: string;
             text: string;
@@ -609,12 +615,30 @@ export interface CliDependencies {
             ordinal: number;
             title: string;
             dependsOn?: string[];
+            expectedMinutes?: number | null;
         }) => Awaitable<MetabotCommandResult<unknown>>;
         setSubtaskStatus?: (input: {
             from?: string;
             id: string;
             subtaskId: string;
             status: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        note?: (input: {
+            from?: string;
+            id: string;
+            subtaskId?: string;
+            text: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        setStage?: (input: {
+            from?: string;
+            id: string;
+            stage: string;
+        }) => Awaitable<MetabotCommandResult<unknown>>;
+        updateTask?: (input: {
+            from?: string;
+            id: string;
+            title?: string;
+            goal?: string;
         }) => Awaitable<MetabotCommandResult<unknown>>;
     };
     knowledgeBase?: {

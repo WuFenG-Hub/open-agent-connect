@@ -127,6 +127,7 @@ const metaIdSearchApi_1 = require("../core/metaid/metaIdSearchApi");
 const metaAppSource_1 = require("../core/metaapp/metaAppSource");
 const search_1 = require("../core/metaweb/search");
 const pinRead_1 = require("../core/metaweb/pinRead");
+const pinBatchRead_1 = require("../core/metaweb/pinBatchRead");
 const format_1 = require("../core/metaweb/format");
 const uri_1 = require("../core/metaweb/uri");
 const recall_1 = require("../core/qanda/recall");
@@ -2627,6 +2628,38 @@ function createDefaultCliDependencies(context) {
             return (0, commandResult_1.commandFailed)('metaweb_read_failed', message);
         }
     }
+    // `metabot metaweb batch-read --pins-file` — up to 50 pins in one round
+    // trip (POST /api/metaweb/pins:batch), rendered under the batch result
+    // budget with the machine-readable RECEIPT line. In-process like
+    // `metaweb search/read`.
+    async function runMetawebBatchRead(input) {
+        try {
+            const pinIds = (Array.isArray(input.pinIds) ? input.pinIds : [])
+                .map((id) => String(id ?? '').trim())
+                .filter(Boolean);
+            if (pinIds.length === 0) {
+                return (0, commandResult_1.commandFailed)('missing_pin_ids', '--pins-file must carry a non-empty pinIds array.');
+            }
+            if (pinIds.length > pinBatchRead_1.METAWEB_PINS_BATCH_MAX) {
+                return (0, commandResult_1.commandFailed)('too_many_pins', `metaweb batch-read accepts at most ${pinBatchRead_1.METAWEB_PINS_BATCH_MAX} pinIds per call (got ${pinIds.length}) — split the list into smaller batches.`);
+            }
+            const entries = await (0, pinBatchRead_1.metawebPinsBatch)(pinIds, metawebServiceOptions());
+            try {
+                const { text, receipt } = (0, pinBatchRead_1.renderMetawebPinsBatch)(pinIds, entries);
+                return (0, commandResult_1.commandSuccess)({ ...receipt, formatted: text });
+            }
+            catch (error) {
+                if (error instanceof pinBatchRead_1.MetawebBatchTooLargeError) {
+                    return (0, commandResult_1.commandFailed)('batch_too_large', error.message);
+                }
+                throw error;
+            }
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return (0, commandResult_1.commandFailed)('metaweb_batch_read_failed', message);
+        }
+    }
     // `metabot qanda search|latest|detail|answers` — read-only Q&A recall over
     // the metaso-p2p Q&A APIs, in-process like `metaweb search/read`. The data
     // envelope carries the raw rows plus a model-ready `formatted` block (the
@@ -3273,9 +3306,13 @@ function createDefaultCliDependencies(context) {
         metaweb: {
             search: async (input) => runMetawebSearch(input),
             read: async (input) => runMetawebRead(input),
+            batchRead: async (input) => runMetawebBatchRead(input),
         },
         buzz: {
             post: async (input) => requestJsonForSelectedActor('POST', '/api/buzz/post', typeof input.from === 'string' ? input.from : undefined, input),
+        },
+        comment: {
+            pin: async (input) => requestJsonForSelectedActor('POST', '/api/comment/pin', typeof input.from === 'string' ? input.from : undefined, input),
         },
         simplenote: {
             post: async (input) => requestJsonForSelectedActor('POST', '/api/simplenote/post', typeof input.from === 'string' ? input.from : undefined, input),
@@ -3627,6 +3664,8 @@ function createDefaultCliDependencies(context) {
                 }
                 return requestJsonForSelectedActor('POST', '/api/chat/private', typeof input.from === 'string' ? input.from : undefined, input);
             },
+            groupJoin: async (input) => requestJsonForSelectedActor('POST', '/api/chat/group/join', typeof input.from === 'string' ? input.from : undefined, input),
+            groupSend: async (input) => requestJsonForSelectedActor('POST', '/api/chat/group/send', typeof input.from === 'string' ? input.from : undefined, input),
             interim: async (input) => {
                 // Bot-initiated interim updates ride the ticket-gated daemon route;
                 // inside a reply turn this is the ONLY sanctioned send surface (the
@@ -5481,6 +5520,7 @@ function createDefaultCliDependencies(context) {
                     return (0, commandResult_1.commandSuccess)(await store.addSubtask({
                         taskId: input.id, id: input.subtaskId, ordinal: input.ordinal,
                         title: input.title, dependsOn: input.dependsOn,
+                        expectedMinutes: input.expectedMinutes ?? null,
                     }));
                 }
                 catch (error) {
@@ -5497,6 +5537,62 @@ function createDefaultCliDependencies(context) {
                 if (!subtask)
                     return (0, commandResult_1.commandFailed)('longtask_subtask_not_found', `No sub-task ${input.subtaskId} in ${input.id}.`);
                 return (0, commandResult_1.commandSuccess)(subtask);
+            },
+            note: async (input) => {
+                const actor = await resolveActorHomeDir(context, input.from);
+                if (!('homeDir' in actor))
+                    return actor;
+                const { createLongTermStore, longTermStorePaths } = await Promise.resolve().then(() => __importStar(require('../core/longtask/store.js')));
+                const store = createLongTermStore(longTermStorePaths((0, paths_1.resolveMetabotPaths)(actor.homeDir)));
+                // addEvent itself does not know tasks, so guard here: a note must never
+                // land on a task (or sub-task) that does not exist.
+                const task = await store.getTask(input.id);
+                if (!task)
+                    return (0, commandResult_1.commandFailed)('longtask_not_found', `No long-term task ${input.id}.`);
+                if (input.subtaskId) {
+                    const subtask = (await store.listSubtasks(input.id)).find((row) => row.id === input.subtaskId);
+                    if (!subtask)
+                        return (0, commandResult_1.commandFailed)('longtask_subtask_not_found', `No sub-task ${input.subtaskId} in ${input.id}.`);
+                }
+                const event = await store.addEvent({
+                    taskId: input.id,
+                    subtaskId: input.subtaskId ?? null,
+                    kind: 'note',
+                    actor: 'local',
+                    detail: input.text,
+                    at: new Date().toISOString(),
+                });
+                return (0, commandResult_1.commandSuccess)(event);
+            },
+            setStage: async (input) => {
+                const actor = await resolveActorHomeDir(context, input.from);
+                if (!('homeDir' in actor))
+                    return actor;
+                const { createLongTermStore, longTermStorePaths } = await Promise.resolve().then(() => __importStar(require('../core/longtask/store.js')));
+                const store = createLongTermStore(longTermStorePaths((0, paths_1.resolveMetabotPaths)(actor.homeDir)));
+                const task = await store.setTaskStage(input.id, input.stage, new Date().toISOString());
+                if (!task)
+                    return (0, commandResult_1.commandFailed)('longtask_not_found', `No long-term task ${input.id}.`);
+                return (0, commandResult_1.commandSuccess)(task);
+            },
+            updateTask: async (input) => {
+                const actor = await resolveActorHomeDir(context, input.from);
+                if (!('homeDir' in actor))
+                    return actor;
+                const { createLongTermStore, longTermStorePaths } = await Promise.resolve().then(() => __importStar(require('../core/longtask/store.js')));
+                const store = createLongTermStore(longTermStorePaths((0, paths_1.resolveMetabotPaths)(actor.homeDir)));
+                try {
+                    const task = await store.updateTask({
+                        taskId: input.id, title: input.title, goal: input.goal,
+                        nowIso: new Date().toISOString(),
+                    });
+                    if (!task)
+                        return (0, commandResult_1.commandFailed)('longtask_not_found', `No long-term task ${input.id}.`);
+                    return (0, commandResult_1.commandSuccess)(task);
+                }
+                catch (error) {
+                    return (0, commandResult_1.commandFailed)('longtask_update_failed', error instanceof Error ? error.message : String(error));
+                }
             },
         },
         surf: {
@@ -5770,6 +5866,7 @@ function mergeCliDependencies(context) {
     return {
         config: { ...defaults.config, ...provided.config },
         buzz: { ...defaults.buzz, ...provided.buzz },
+        comment: { ...defaults.comment, ...provided.comment },
         browser: { ...defaults.browser, ...provided.browser },
         metaapp: { ...defaults.metaapp, ...provided.metaapp },
         metaid: { ...defaults.metaid, ...provided.metaid },

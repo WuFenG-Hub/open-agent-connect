@@ -77,6 +77,12 @@ export interface LongTermStore {
     getTask(taskId: string): Promise<LongTermTask | null>;
     listTasks(): Promise<LongTermTask[]>;
     setTaskStage(taskId: string, stage: LongTermTaskStage, nowIso: string): Promise<LongTermTask | null>;
+    updateTask(input: {
+        taskId: string;
+        title?: string;
+        goal?: string;
+        nowIso: string;
+    }): Promise<LongTermTask | null>;
     addSubtask(input: AddSubtaskInput): Promise<LongTermStoredSubtask>;
     listSubtasks(taskId: string): Promise<LongTermStoredSubtask[]>;
     updateSubtaskStatus(taskId: string, subtaskId: string, status: LongTermSubtaskStatus, nowIso: string): Promise<LongTermStoredSubtask | null>;

@@ -98,5 +98,17 @@ function runMetawebCommand(args, context) {
             return Promise.resolve(commandNotImplemented('read'));
         return Promise.resolve(handler({ pinId }));
     }
+    if (subcommand === 'batch-read') {
+        const pinsFile = readFlagValue(args, '--pins-file');
+        if (!pinsFile)
+            return Promise.resolve((0, helpers_1.commandMissingFlag)('--pins-file'));
+        const handler = context.dependencies.metaweb?.batchRead;
+        if (!handler)
+            return Promise.resolve(commandNotImplemented('batch-read'));
+        return (0, helpers_1.readJsonFile)(context, pinsFile).then((request) => {
+            const raw = (request && typeof request === 'object' && !Array.isArray(request) ? request : {});
+            return handler({ pinIds: Array.isArray(raw.pinIds) ? raw.pinIds : [] });
+        });
+    }
     return Promise.resolve(commandUnknownSubcommand(`metaweb ${(0, helpers_1.redactSensitiveArgs)(args).join(' ')}`.trim()));
 }

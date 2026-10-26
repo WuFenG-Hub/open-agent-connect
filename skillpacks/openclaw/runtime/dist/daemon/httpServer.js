@@ -13,6 +13,7 @@ const commandResult_1 = require("../core/contracts/commandResult");
 const config_1 = require("./routes/config");
 const traffic_1 = require("./routes/traffic");
 const buzz_1 = require("./routes/buzz");
+const comment_1 = require("./routes/comment");
 const simplenote_1 = require("./routes/simplenote");
 const qanda_1 = require("./routes/qanda");
 const protocol_1 = require("./routes/protocol");
@@ -51,6 +52,7 @@ const ROUTES = [
     config_1.handleConfigRoutes,
     traffic_1.handleTrafficRoutes,
     buzz_1.handleBuzzRoutes,
+    comment_1.handleCommentRoutes,
     simplenote_1.handleSimpleNoteRoutes,
     qanda_1.handleQandaRoutes,
     protocol_1.handleProtocolRoutes,

@@ -13,7 +13,14 @@ const helpers_1 = require("./helpers");
 /** Sub-verbs this command accepts, in help order. */
 exports.LONG_TASK_SUBCOMMANDS = [
     'create', 'list', 'show', 'board', 'advance', 'add-subtask', 'set-status',
+    'note', 'set-stage', 'update',
 ];
+/**
+ * Stages `set-stage` accepts: the four lifecycle moves. `defining` is excluded
+ * on purpose — this surface creates tasks as active (no draft ceremony), so
+ * `defining` is not a stage a caller can move anything into.
+ */
+const SET_STAGE_STAGES = ['active', 'paused', 'cancelled', 'done'];
 async function runLongTaskCommand(args, context) {
     const [subcommand] = args;
     const from = (0, helpers_1.readFromFlag)(args);
@@ -73,11 +80,23 @@ async function runLongTaskCommand(args, context) {
                 return (0, commandResult_1.commandFailed)('invalid_flag_value', `--ordinal must be an integer, got "${ordinalRaw}".`);
             }
             const dependsRaw = (0, helpers_1.readFlagValue)(args, '--depends-on');
+            // The store has validated expectedMinutes since the port; only the CLI
+            // flag was missing. Positive integer minutes, null-ish when absent.
+            const expectedRaw = (0, helpers_1.readFlagValue)(args, '--expected-minutes');
+            let expectedMinutes;
+            if (expectedRaw !== null) {
+                const parsed = Number(expectedRaw);
+                if (!Number.isInteger(parsed) || parsed <= 0) {
+                    return (0, commandResult_1.commandFailed)('invalid_flag_value', `--expected-minutes must be a positive integer, got "${expectedRaw}".`);
+                }
+                expectedMinutes = parsed;
+            }
             return deps.addSubtask({
                 from, id, subtaskId, ordinal, title,
                 dependsOn: dependsRaw
                     ? dependsRaw.split(',').map((entry) => entry.trim()).filter(Boolean)
                     : undefined,
+                expectedMinutes,
             });
         }
         case 'set-status': {
@@ -94,6 +113,44 @@ async function runLongTaskCommand(args, context) {
             if (!status)
                 return (0, helpers_1.commandMissingFlag)('--status');
             return deps.setSubtaskStatus({ from, id, subtaskId, status });
+        }
+        case 'note': {
+            if (!deps.note)
+                return (0, commandResult_1.commandFailed)('not_implemented', 'Long-task note is not configured.');
+            const id = (0, helpers_1.readFlagValue)(args, '--id');
+            const text = (0, helpers_1.readFlagValue)(args, '--text');
+            if (!id)
+                return (0, helpers_1.commandMissingFlag)('--id');
+            if (!text)
+                return (0, helpers_1.commandMissingFlag)('--text');
+            const subtaskId = (0, helpers_1.readFlagValue)(args, '--subtask');
+            return deps.note({ from, id, subtaskId: subtaskId ?? undefined, text });
+        }
+        case 'set-stage': {
+            if (!deps.setStage)
+                return (0, commandResult_1.commandFailed)('not_implemented', 'Long-task setStage is not configured.');
+            const id = (0, helpers_1.readFlagValue)(args, '--id');
+            const stage = (0, helpers_1.readFlagValue)(args, '--stage');
+            if (!id)
+                return (0, helpers_1.commandMissingFlag)('--id');
+            if (!stage)
+                return (0, helpers_1.commandMissingFlag)('--stage');
+            if (!SET_STAGE_STAGES.includes(stage)) {
+                return (0, commandResult_1.commandFailed)('invalid_flag_value', `--stage must be one of ${SET_STAGE_STAGES.join('|')}, got "${stage}".`);
+            }
+            return deps.setStage({ from, id, stage });
+        }
+        case 'update': {
+            if (!deps.updateTask)
+                return (0, commandResult_1.commandFailed)('not_implemented', 'Long-task updateTask is not configured.');
+            const id = (0, helpers_1.readFlagValue)(args, '--id');
+            if (!id)
+                return (0, helpers_1.commandMissingFlag)('--id');
+            const title = (0, helpers_1.readFlagValue)(args, '--title');
+            const goal = (0, helpers_1.readFlagValue)(args, '--goal');
+            if (!title && !goal)
+                return (0, helpers_1.commandMissingFlag)('--title or --goal');
+            return deps.updateTask({ from, id, title: title ?? undefined, goal: goal ?? undefined });
         }
         default:
             return (0, helpers_1.commandUnknownSubcommand)(`longtask${subcommand ? ` ${subcommand}` : ''}`);

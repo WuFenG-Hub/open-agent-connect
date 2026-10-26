@@ -102,6 +102,8 @@ const ownerOnboarding_1 = require("../core/owner/ownerOnboarding");
 const mvcSponsorWritePin_1 = require("../core/subsidy/mvcSponsorWritePin");
 const postBuzz_1 = require("../core/buzz/postBuzz");
 const publish_1 = require("../core/simplenote/publish");
+const publishCommentPin_1 = require("../core/comment/publishCommentPin");
+const groupChatPins_1 = require("../core/group/groupChatPins");
 const publish_2 = require("../core/qanda/publish");
 const ledger_1 = require("../core/qanda/ledger");
 const recall_1 = require("../core/qanda/recall");
@@ -12076,7 +12078,39 @@ function createDefaultMetabotDaemonHandlers(input) {
                     ]), 'buzz_post_failed');
                 }
             },
-        }, simplenote: {
+        },
+        // comment_pin: one paycomment pin — a public thread reply on ANY pin
+        // (payload-only write, no upload), same posture as the qanda like route.
+        comment: {
+            pin: async (rawInput) => {
+                const actor = await resolveActorWriteContext(rawInput.from);
+                if ('failure' in actor) {
+                    return actor.failure;
+                }
+                const state = await actor.runtimeStateStore.readState();
+                if (!state.identity) {
+                    return (0, commandResult_1.commandFailed)('identity_missing', 'Create a local MetaBot identity before commenting.');
+                }
+                try {
+                    const network = await resolveWriteNetworkForHome(rawInput.network, actor.homeDir);
+                    const result = await (0, publishCommentPin_1.publishCommentPin)(actor.signer, {
+                        pinId: normalizeText(rawInput.pinId ?? rawInput.pin_id),
+                        content: normalizeText(rawInput.content),
+                        network,
+                    });
+                    return (0, commandResult_1.commandSuccess)(result);
+                }
+                catch (error) {
+                    const fallbackCode = error instanceof publishCommentPin_1.CommentPublishError ? error.code : 'comment_pin_failed';
+                    return await commandFailedOrBroadcastUnknown(error, 'comment', (0, writeAttempts_1.stableChainWriteHash)('comment', [
+                        normalizeText(rawInput.pinId ?? rawInput.pin_id),
+                        normalizeText(rawInput.content),
+                        await resolveWriteNetworkForHome(rawInput.network, actor.homeDir).catch(() => 'mvc'),
+                    ]), fallbackCode);
+                }
+            },
+        },
+        simplenote: {
             post: async (rawInput) => {
                 const actor = await resolveActorWriteContext(rawInput.from);
                 if ('failure' in actor) {
@@ -15230,6 +15264,82 @@ function createDefaultMetabotDaemonHandlers(input) {
                 }
                 catch (error) {
                     return (0, commandResult_1.commandFailed)('history_fetch_failed', error instanceof Error ? error.message : 'Failed to fetch private chat history.');
+                }
+            },
+            // Group chat primitives (SimpleGroupJoin / SimpleGroupChat) — the two
+            // on-chain actions of the IDBots group_chat tool. The join body carries
+            // {groupId, state: 1} with referrer/k only when non-empty (IDBots
+            // main.ts tool-path omission form); the send body carries the
+            // AES-encrypted message (the CALLER encrypts with the group crypto —
+            // the core builder refuses plaintext-looking content).
+            groupJoin: async (rawInput) => {
+                const actor = await resolveActorWriteContext(rawInput.from);
+                if ('failure' in actor) {
+                    return actor.failure;
+                }
+                const state = await actor.runtimeStateStore.readState();
+                if (!state.identity) {
+                    return (0, commandResult_1.commandFailed)('identity_missing', 'Create a local MetaBot identity before joining a group.');
+                }
+                try {
+                    const network = await resolveWriteNetworkForHome(rawInput.network, actor.homeDir);
+                    const result = await (0, groupChatPins_1.joinGroupChat)(actor.signer, {
+                        groupId: normalizeText(rawInput.groupId ?? rawInput.group_id),
+                        referrer: normalizeText(rawInput.referrer),
+                        k: normalizeText(rawInput.k),
+                        network,
+                    });
+                    return (0, commandResult_1.commandSuccess)(result);
+                }
+                catch (error) {
+                    const fallbackCode = error instanceof groupChatPins_1.GroupChatPublishError ? error.code : 'group_join_failed';
+                    return await commandFailedOrBroadcastUnknown(error, 'group-join', (0, writeAttempts_1.stableChainWriteHash)('group-join', [
+                        normalizeText(rawInput.groupId ?? rawInput.group_id),
+                        normalizeText(rawInput.referrer),
+                        normalizeText(rawInput.k),
+                        await resolveWriteNetworkForHome(rawInput.network, actor.homeDir).catch(() => 'mvc'),
+                    ]), fallbackCode);
+                }
+            },
+            groupSend: async (rawInput) => {
+                const actor = await resolveActorWriteContext(rawInput.from);
+                if ('failure' in actor) {
+                    return actor.failure;
+                }
+                const state = await actor.runtimeStateStore.readState();
+                if (!state.identity) {
+                    return (0, commandResult_1.commandFailed)('identity_missing', 'Create a local MetaBot identity before sending a group message.');
+                }
+                // The on-chain nickName is ALWAYS the acting bot's registered identity
+                // name, resolved here from the runtime state — a request-supplied
+                // nickName is deliberately never read (IDBots incident: sender_name
+                // "claude bot" on an otherwise-correct pin). Unresolvable name falls
+                // back to the empty string (IDBots `?? ''` semantics).
+                const nickName = normalizeText(state.identity.name);
+                const requestMention = Array.isArray(rawInput.mention)
+                    ? rawInput.mention.map((entry) => normalizeText(entry)).filter(Boolean)
+                    : [];
+                try {
+                    const network = await resolveWriteNetworkForHome(rawInput.network, actor.homeDir);
+                    const result = await (0, groupChatPins_1.sendGroupChatMessage)(actor.signer, {
+                        groupId: normalizeText(rawInput.groupId ?? rawInput.group_id),
+                        content: normalizeText(rawInput.content),
+                        nickName,
+                        replyPin: normalizeText(rawInput.replyPin ?? rawInput.reply_pin) || undefined,
+                        channelId: normalizeText(rawInput.channelId ?? rawInput.channel_id) || undefined,
+                        mention: requestMention.length ? requestMention : undefined,
+                        network,
+                    });
+                    return (0, commandResult_1.commandSuccess)(result);
+                }
+                catch (error) {
+                    const fallbackCode = error instanceof groupChatPins_1.GroupChatPublishError ? error.code : 'group_send_failed';
+                    return await commandFailedOrBroadcastUnknown(error, 'group-send', (0, writeAttempts_1.stableChainWriteHash)('group-send', [
+                        normalizeText(rawInput.groupId ?? rawInput.group_id),
+                        normalizeText(rawInput.content),
+                        nickName,
+                        await resolveWriteNetworkForHome(rawInput.network, actor.homeDir).catch(() => 'mvc'),
+                    ]), fallbackCode);
                 }
             },
             private: async (rawInput) => {

@@ -57,6 +57,33 @@ async function runChatCommand(args, context) {
             ...(from ? { from } : {}),
         });
     }
+    if (args[0] === 'group') {
+        const subAction = args[1];
+        if (subAction !== 'join' && subAction !== 'send') {
+            return (0, helpers_1.commandUnknownSubcommand)(`chat group ${(0, helpers_1.redactSensitiveArgs)(args.slice(1)).join(' ')}`.trim());
+        }
+        const requestFile = (0, helpers_1.readFlagValue)(args, '--request-file');
+        if (!requestFile) {
+            return (0, helpers_1.commandMissingFlag)('--request-file');
+        }
+        const handler = subAction === 'join'
+            ? context.dependencies.chat?.groupJoin
+            : context.dependencies.chat?.groupSend;
+        if (!handler) {
+            return (0, commandResult_1.commandFailed)('not_implemented', `Chat group ${subAction} handler is not configured.`);
+        }
+        const from = (0, helpers_1.readFromFlag)(args);
+        const chainFlag = (0, helpers_1.readChainWriteFlag)(args);
+        if (chainFlag.error) {
+            return chainFlag.error;
+        }
+        const request = await (0, helpers_1.readJsonFile)(context, requestFile);
+        return handler({
+            ...request,
+            ...(chainFlag.chain ? { network: chainFlag.chain } : {}),
+            ...(from ? { from } : {}),
+        });
+    }
     if (args[0] === 'conversations') {
         const handler = context.dependencies.chat?.conversations;
         if (!handler) {
