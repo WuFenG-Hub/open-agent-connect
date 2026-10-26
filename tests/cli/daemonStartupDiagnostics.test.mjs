@@ -16,9 +16,36 @@ const {
 const { resolveMetabotDaemonPaths } = require('../../dist/core/state/paths.js');
 const { createDaemonStateStore } = require('../../dist/core/state/daemonStateStore.js');
 
+/**
+ * A pid that is provably not running. A hardcoded pid (1111, 999999) can
+ * collide with a live system process depending on the host's process table,
+ * which made these fixtures flaky on CI runners (the daemon record must
+ * classify as stale wherever the suite runs). Probes downward through the
+ * high pid ranges (Linux pid_max ~4.19M, macOS ~99,999); ESRCH means the pid
+ * is free, EINVAL/EPERM mean it is out of range for this host — keep probing.
+ */
+function pickDeadPid() {
+  const probes = [
+    4_194_303, 4_194_211, 4_000_003, 3_000_003, 2_000_003, 1_000_003,
+    999_983, 999_893, 500_003, 300_003, 100_003,
+  ];
+  for (const candidate of probes) {
+    try {
+      process.kill(candidate, 0);
+    } catch (error) {
+      if (error.code === 'ESRCH') {
+        return candidate;
+      }
+    }
+  }
+  throw new Error('no provably-dead pid found for the fixture — process table is implausibly full');
+}
+
 test('collectDaemonStartupDiagnostics reads global daemon.json and daemon.lock for the installation', async (t) => {
   const systemHome = await mkdtempTempRoot('metabot-daemon-diagnostics-');
   const paths = resolveMetabotDaemonPaths(systemHome);
+  const staleDaemonPid = pickDeadPid();
+  const staleLockPid = pickDeadPid();
   t.after(async () => {
     await rm(systemHome, { recursive: true, force: true });
   });
@@ -27,7 +54,7 @@ test('collectDaemonStartupDiagnostics reads global daemon.json and daemon.lock f
     schemaVersion: 1,
     instanceId: 'default',
     ownerId: 'daemon-alice',
-    pid: 1111,
+    pid: staleDaemonPid,
     host: '127.0.0.1',
     port: 32390,
     baseUrl: 'http://127.0.0.1:32390',
@@ -40,7 +67,7 @@ test('collectDaemonStartupDiagnostics reads global daemon.json and daemon.lock f
   await mkdir(path.dirname(paths.daemonLockPath), { recursive: true });
   await writeFile(paths.daemonLockPath, `${JSON.stringify({
     ownerId: 'lock-alice',
-    pid: 999999,
+    pid: staleLockPid,
     acquiredAt: 654321,
   }, null, 2)}\n`, 'utf8');
 
@@ -54,13 +81,13 @@ test('collectDaemonStartupDiagnostics reads global daemon.json and daemon.lock f
   assert.equal(snapshot.daemonStatePath, paths.daemonStatePath);
   assert.equal(snapshot.lockPath, paths.daemonLockPath);
   assert.equal(snapshot.startupLogPath, paths.daemonLogPath);
-  // pid 1111 is not a running process in the test environment — a present
-  // record with a dead pid classifies as stale.
+  // A present record whose pid is provably dead (probed, not hardcoded)
+  // classifies as stale on every host — see pickDeadPid().
   assert.equal(snapshot.daemonRecordState, 'stale');
   assert.equal(snapshot.daemonRecord?.baseUrl, 'http://127.0.0.1:32390');
-  assert.equal(snapshot.daemonRecord?.pid, 1111);
+  assert.equal(snapshot.daemonRecord?.pid, staleDaemonPid);
   assert.equal(snapshot.lockInfo?.ownerId, 'lock-alice');
-  assert.equal(snapshot.lockInfo?.pid, 999999);
+  assert.equal(snapshot.lockInfo?.pid, staleLockPid);
   assert.equal(snapshot.lockOwnerAlive, false);
 });
 
@@ -114,7 +141,7 @@ test('formatDaemonStartupTimeoutMessage includes the installation, preferred por
 
 test('classifyDaemonRecordState distinguishes missing, stale, and alive records', () => {
   assert.equal(classifyDaemonRecordState(null), 'missing');
-  assert.equal(classifyDaemonRecordState({ pid: 999_999 }), 'stale');
+  assert.equal(classifyDaemonRecordState({ pid: pickDeadPid() }), 'stale');
   assert.equal(classifyDaemonRecordState({ pid: process.pid }), 'alive');
   assert.equal(classifyDaemonRecordState({}), 'missing');
 });
