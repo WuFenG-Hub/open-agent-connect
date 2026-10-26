@@ -1,7 +1,7 @@
 // Bridge tests for the metatask read tools (PR-1: metatask_list /
 // metatask_get / metatask_replay). Fake-run only: argv spelling, envelope
 // rendering, CLI failure relaying, and the description-discipline invariants.
-// No daemon, no chain, no ports. Protocol truth lives in oac-src/tests/metatask/.
+// No daemon, no chain, no ports. Protocol truth lives in tests/metatask/.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -143,10 +143,12 @@ const TASK = {
 
 // ── registration ─────────────────────────────────────────────────────────────
 
-test('bindMetataskToolInstall registers exactly the three read tools', () => {
+test('bindMetataskToolInstall registers the three read tools', () => {
   const host = fakeHost()
   plugin.bindMetataskToolInstall(host.ctx)
-  assert.deepEqual(host.tools.map((tool) => tool.name), TOOL_NAMES)
+  // The module registers every metatask family; this file owns the read face.
+  const registered = host.tools.map((tool) => tool.name)
+  assert.deepEqual(registered.filter((name) => TOOL_NAMES.includes(name)), TOOL_NAMES)
 })
 
 // ── argv spelling (identical to the metatask-routes.ts dispatcher) ──────────
@@ -294,14 +296,14 @@ test('a thrown CLI-bridge error surfaces as the same string envelope', async () 
 
 // ── description discipline (wayfinding: participation verbs land later) ─────
 
-test('no read-tool description mentions the later participation tools or verbs', () => {
+test('no read-tool description mentions the participation tools or verbs', () => {
   const host = fakeHost()
   plugin.bindMetataskToolInstall(host.ctx)
-  for (const tool of host.tools) {
+  for (const tool of host.tools.filter((tool) => TOOL_NAMES.includes(tool.name))) {
     assert.doesNotMatch(
       tool.description,
       /metatask_claim|submit|verify|publish|amend/,
-      `${tool.name} description must not point at participation verbs (they land in later PRs)`,
+      `${tool.name} description must not point at participation verbs (read tools stay write-agnostic)`,
     )
     assert.match(tool.description, /daemon/, `${tool.name} description must state the daemon requirement`)
   }
