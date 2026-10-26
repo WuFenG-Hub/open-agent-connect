@@ -196,7 +196,7 @@ export function formatMetaIdProfile(detail: DetailRecord): string {
 }
 
 function escapeTableCell(value: string): string {
-  return value.replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
+  return value.replace(/\s+/g, ' ').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').trim()
 }
 
 function formatPrice(service: ServiceRow): string {

@@ -132,6 +132,11 @@ export function buildOmniCastToolDefinitions(input: {
       if (!pinPath) {
         return 'omni_cast requires `path` (a MetaID protocol path, e.g. /protocols/paylike).'
       }
+      // A pin path is permanent once written: refuse malformed ones (no
+      // leading slash, whitespace or control characters) before any spend.
+      if (!/^\/[^\s\u0000-\u001f\u007f]+$/.test(pinPath)) {
+        return `Invalid path "${pinPath}": a MetaID protocol path starts with "/" and contains no whitespace or control characters (e.g. /protocols/paylike).`
+      }
 
       const hasPayload = typeof args.payload === 'string' && args.payload !== ''
       const payloadFile = textArg(args, 'payload_file')
@@ -146,10 +151,13 @@ export function buildOmniCastToolDefinitions(input: {
         return `Invalid network "${args.network}" — must be one of mvc, doge, btc.`
       }
 
-      // Group-chat payloads are encrypted by the host in IDBots; OAC does not
-      // have that primitive yet, so refuse instead of writing plaintext.
-      if (pinPath === '/protocols/simplegroupchat') {
-        return 'omni_cast does not support /protocols/simplegroupchat yet — group message encryption arrives with the OAC group-chat batch. Writing an unencrypted group payload would leak the message; use send_group_message/group_chat tooling when it lands.';
+      // Group-chat payloads must be AES-encrypted with the group key; a raw
+      // write here would put the plaintext on-chain. The whole family is
+      // refused (versioned sub-paths and the file variant included) and
+      // routed to the group_chat tool, which encrypts in-process.
+      if (/^\/protocols\/simple(file)?groupchat(\/|$)/i.test(pinPath)) {
+        return 'omni_cast does not support /protocols/simplegroupchat or /protocols/simplefilegroupchat (any group-chat protocol path): '
+          + 'writing an unencrypted group payload would leak the message. Use the group_chat tool (action send_group_message), which encrypts with the group key before broadcast.'
       }
 
       const operation = args.operation === 'modify' || args.operation === 'revoke' ? args.operation : 'create'

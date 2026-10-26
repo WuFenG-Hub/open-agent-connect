@@ -59,6 +59,27 @@ test('empty content is rejected before any CLI call', async () => {
   assert.equal(calls.length, 0)
 })
 
+test('a DOGE buzz with local attachments is refused before any approval or CLI call', async () => {
+  const { run, calls } = fakeRun()
+  const asked = []
+  const approval = { request: async (req) => { asked.push(req); return 'allowed-once' } }
+  const workspace = mkdtempSync(path.join(tmpdir(), 'bz-doge-'))
+  const inside = path.join(workspace, 'pic.png')
+  writeFileSync(inside, 'png')
+  const host = fakeHost({ agentPresets: { composedPreset: () => 'oac-alice' } })
+  const [tool] = plugin.buildBuzzToolDefinitions({
+    host: host.ctx, hostAgent: { ctx: host.ctx }, approval, run, getWorkspaceDir: () => workspace,
+  })
+  const refused = await tool.execute({ content: 'hi', attachments: [inside], network: 'doge' }, {})
+  assert.match(refused, /cannot upload local attachments on DOGE/)
+  assert.equal(calls.length, 0)
+  assert.equal(asked.length, 0)
+  // metafile:// URIs need no upload, so a DOGE buzz may still reference them.
+  const ok = await tool.execute({ content: 'hi', attachments: ['metafile://keep'], network: 'doge' }, {})
+  assert.match(ok, /pin:\/\/bz1/)
+  assert.equal(calls[0].payload.network, 'doge')
+})
+
 test('metafile URIs and in-workspace attachments post without asking; external files require approval', async () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'bz-ws-'))
   const inside = path.join(workspace, 'shot.png')
@@ -96,7 +117,7 @@ test('metafile URIs and in-workspace attachments post without asking; external f
   })
 
   const ok = await tool.execute({
-    content: 'hello chain', attachments: [inside, 'metafile://keep'], quote_pin: 'q9', content_type: 'text/markdown', network: 'doge',
+    content: 'hello chain', attachments: [inside, 'metafile://keep'], quote_pin: 'q9', content_type: 'text/markdown', network: 'btc',
   }, {})
   assert.match(ok, /pin:\/\/bz1/)
   assert.match(ok, /cost: 1200 sats/)
@@ -105,7 +126,7 @@ test('metafile URIs and in-workspace attachments post without asking; external f
   assert.equal(calls[0].payload.content, 'hello chain')
   assert.equal(calls[0].payload.contentType, 'text/markdown')
   assert.equal(calls[0].payload.quotePin, 'q9')
-  assert.equal(calls[0].payload.network, 'doge')
+  assert.equal(calls[0].payload.network, 'btc')
   assert.deepEqual(calls[0].payload.attachments, [inside, 'metafile://keep'])
 
   const external = await tool.execute({ content: 'see attachment', attachments: [outside] }, {})

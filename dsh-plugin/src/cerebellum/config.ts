@@ -84,7 +84,10 @@ export function resolveCerebellumConfig(appConfig: unknown): ResolvedCerebellumC
     model = CEREBELLUM_FREE_MODEL;
   } else {
     const rawBaseUrl = typeof candidate.baseUrl === 'string' ? candidate.baseUrl.trim() : '';
-    baseUrl = (rawBaseUrl || CEREBELLUM_DEFAULT_BASE_URL).replace(/\/+$/, '');
+    baseUrl = rawBaseUrl || CEREBELLUM_DEFAULT_BASE_URL;
+    while (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
     model = typeof candidate.model === 'string' && candidate.model.trim()
       ? candidate.model.trim()
       : CEREBELLUM_DEFAULT_MODEL;

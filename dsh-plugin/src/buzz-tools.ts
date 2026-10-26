@@ -87,7 +87,7 @@ export function buildBuzzToolDefinitions(input: {
         content: { type: 'string', description: 'Buzz text content. Required and must not be empty.' },
         attachments: { type: 'array', items: { type: 'string' }, description: 'Local absolute file paths and/or metafile:// URIs.' },
         content_type: { type: 'string', description: 'MIME type of the content field. Default: text/plain;utf-8.' },
-        network: { type: 'string', enum: ['mvc', 'doge', 'btc'], description: 'Buzz write network. Default: mvc. DOGE is allowed for the buzz write only; attachments always upload on MVC.' },
+        network: { type: 'string', enum: ['mvc', 'doge', 'btc'], description: 'Buzz write network. Default: mvc. Local attachments upload on the same network, and DOGE does not support file uploads — a DOGE buzz may only reference metafile:// URIs (upload the files on MVC first).' },
         quote_pin: { type: 'string', description: 'pinId of the buzz being quoted/reposted.' },
       },
       required: ['content'],
@@ -112,6 +112,13 @@ export function buildBuzzToolDefinitions(input: {
       const relative = candidates.filter((item) => !path.isAbsolute(item) && !isMetafileUri(item))
       if (relative.length > 0) {
         return `post_buzz requires ABSOLUTE local file paths (or metafile:// URIs). Relative: ${relative.join(', ')}.`
+      }
+      // The buzz core uploads attachments on the buzz write network, and the
+      // file upload path has no DOGE support — refuse before asking the owner
+      // to approve uploads that would fail anyway.
+      if (args.network === 'doge' && localPaths.length > 0) {
+        return 'post_buzz cannot upload local attachments on DOGE (file uploads are not supported there). '
+          + 'Upload the files on MVC first (upload_file) and pass their metafile:// URIs, or post the buzz on mvc.'
       }
       const workspaceDir = input.getWorkspaceDir?.(exec)
       const external = localPaths.filter((item) => !workspaceDir || !isPathInsideDir(item, workspaceDir))

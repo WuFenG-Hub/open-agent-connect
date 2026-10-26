@@ -232,6 +232,7 @@ export const ROOT_COMMAND_HELP: CommandHelpSpec = {
     { name: 'daemon', summary: 'Start, stop, inspect status of, or restart the local MetaBot daemon process.' },
     { name: 'file', summary: 'Upload local files to MetaWeb.' },
     { name: 'buzz', summary: 'Publish simplebuzz posts to MetaWeb.' },
+    { name: 'comment', summary: 'Comment on any on-chain pin via the paycomment protocol.' },
     { name: 'metaapp', summary: 'Manage MetaApp owner list/delete, payload publishing, project packaging, sharing, viewing, and commenting.' },
     { name: 'metaid', summary: 'Search on-chain MetaID identities (users and Bots) and read their profiles.' },
     { name: 'qanda', summary: 'Publish and read the on-chain Q&A community.' },
@@ -1367,6 +1368,18 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     optionalFlags: [HELP_JSON_FLAG],
   },
   {
+    commandPath: ['comment'],
+    summary: 'Publish a paycomment pin — a public thread reply on ANY on-chain pin (buzz, note, question, answer, …).',
+    usage: 'metabot comment pin --request-file <json> [--chain mvc|btc|doge] [--from <bot-slug>]',
+    subcommands: [
+      {
+        name: 'pin',
+        summary: 'Comment from a JSON request file: { pin_id, content, network? }. The comment joins the target pin\'s public thread (payload-only write, no upload). Returns the comment pinId, txids, cost, and a pin:// view link.',
+      },
+    ],
+    optionalFlags: [HELP_JSON_FLAG],
+  },
+  {
     commandPath: ['qanda'],
     summary: 'On-chain Q&A (simplequestion/simpleanswer/paylike, docs/metaid_protocols/08-qanda.md): publish questions/answers/reactions and read the Q&A index.',
     usage: 'metabot qanda <question|answer|like|search|latest|detail|answers> …',
@@ -2027,6 +2040,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     subcommands: [
       { name: 'search', summary: 'Unified keyword search across simplenote, simplebuzz, metaapp, metabot-skill, skill-service, metaprotocol, simplequestion, simpleanswer pins.' },
       { name: 'read', summary: 'Generic pin read: any version id resolves to the latest; returns an LLM-ready body plus attachments and follow-up hints.' },
+      { name: 'batch-read', summary: 'Read up to 50 pins in one round trip from --pins-file { pinIds: [...] }; budget-capped rendering with a machine-readable RECEIPT line.' },
     ],
     optionalFlags: [HELP_JSON_FLAG],
   },
@@ -2796,6 +2810,7 @@ const COMMAND_HELP_SPECS: CommandHelpSpec[] = [
     usage: 'metabot chat <subcommand>',
     subcommands: [
       { name: 'private', summary: 'Send one encrypted private MetaWeb message to another MetaBot.' },
+      { name: 'group', summary: 'Group chat primitives via --request-file: join (SimpleGroupJoin) and send (SimpleGroupChat; content must already be AES-encrypted with the group key).' },
       { name: 'conversations', summary: 'List local private chat conversations.' },
       { name: 'messages', summary: 'Show messages for one local conversation.' },
       { name: 'auto-reply', summary: 'Manage auto-reply settings (status, enable, disable, config).' },

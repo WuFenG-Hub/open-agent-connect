@@ -72,6 +72,15 @@ test('path and payload XOR are enforced before any CLI call', async () => {
   assert.match(badNetwork, /Invalid network "eth"/)
   const groupChat = await tool.execute({ path: '/protocols/simplegroupchat', payload: '{"groupId":"g1","content":"hi"}' }, {})
   assert.match(groupChat, /does not support \/protocols\/simplegroupchat/)
+  assert.match(groupChat, /group_chat tool/)
+  for (const variant of ['/protocols/simplegroupchat/v2', '/protocols/simplefilegroupchat', '/protocols/SimpleGroupChat']) {
+    const refused = await tool.execute({ path: variant, payload: '{}' }, {})
+    assert.match(refused, /does not support \/protocols\/simplegroupchat/, `${variant} must be refused as group-chat family`)
+  }
+  for (const malformed of ['protocols/paylike', '/protocols/pay like']) {
+    const refused = await tool.execute({ path: malformed, payload: '{}' }, {})
+    assert.match(refused, /Invalid path/, `${JSON.stringify(malformed)} must be refused`)
+  }
   assert.equal(calls.length, 0)
 })
 

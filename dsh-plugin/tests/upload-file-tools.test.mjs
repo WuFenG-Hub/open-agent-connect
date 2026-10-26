@@ -86,6 +86,21 @@ test('upload_file description keeps the binary-payload boundary and the path rul
   assert.match(description, /copy the file into the session workspace/)
 })
 
+test('files above the direct-upload size limit are refused before approval and CLI', async () => {
+  const { run, calls } = fakeRun()
+  const asked = []
+  const approval = { request: async (req) => { asked.push(req); return 'allowed-once' }, overrideOf: () => undefined }
+  const host = fakeHost({ agentPresets: { composedPreset: () => 'oac-alice' } })
+  const root = mkdtempTempRootSync('upl-big-')
+  const big = path.join(root, 'clip.mp4')
+  writeFileSync(big, Buffer.alloc(5 * 1024 * 1024 + 1))
+  const tool = buildTools(host, { run, approval, getWorkspaceDir: () => root })
+  const refused = await tool.execute({ file_path: big }, {})
+  assert.match(refused, /above the 5\.00 MiB .* limit for a direct \/file upload/)
+  assert.equal(calls.length, 0)
+  assert.equal(asked.length, 0)
+})
+
 test('missing, relative, and invalid-network inputs are rejected before any CLI call', async () => {
   const { run, calls } = fakeRun()
   const host = fakeHost({ agentPresets: { composedPreset: () => 'oac-alice' } })

@@ -11,6 +11,7 @@
  * surface exists, outside-workspace uploads are auto-declined
  * (wallet-tools B1 lineage).
  */
+import { statSync } from 'node:fs'
 import path from 'node:path'
 import { runMetabotWithPayloadFile, type RunFn } from './cli-payload.js'
 import type { HostAgentLike, HostApproval, HostContext, HostToolDefinition, HostToolExec } from './context-types.js'
@@ -28,6 +29,14 @@ function textArg(args: Record<string, unknown>, key: string): string {
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
+
+/**
+ * Direct /file uploads are single-pin writes with no size cap in the core;
+ * the chunked large-file path (`file upload-large`) is not driven by this
+ * tool, so refuse above its direct-mode ceiling instead of buffering a huge
+ * file into one pin write.
+ */
+const DIRECT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 
 function formatBytes(bytes: unknown): string {
   const n = Number(bytes)
@@ -107,7 +116,7 @@ export function buildUploadFileToolDefinitions(input: {
     name: 'upload_file',
     description:
       'Upload ONE local file to MetaWeb. Pass the absolute file path, never file contents (the runtime streams bytes from disk). '
-      + 'Use when the user asks to upload a BINARY file (image, video, audio, PDF, archive…), or a later step needs a metafile:// URI. The file lands on /file and is cited as metafile://<pinId>. '
+      + 'Use when the user asks to upload a BINARY file (image, short video, audio, PDF, archive…) of at most 5 MiB, or a later step needs a metafile:// URI. The file lands on /file and is cited as metafile://<pinId>. Larger files are refused (the chunked large-file path is not available through this tool). '
       + 'Do NOT upload Markdown/text documents meant to be read or delivered (notes, reports, specs, articles): publish those with post_simplenote instead and cite pin://<pinId> — metafile:// is reserved for binary payloads so file indexers/CDN treat them as media. '
       + 'Do NOT publish on-chain files the user did not ask for (permanent, publicly readable). Not for local reads/writes. '
       + 'Writes permanently on-chain and costs transaction fees. The file path must be ABSOLUTE (relative paths are rejected); files outside the session workspace require the owner\'s '
@@ -139,6 +148,14 @@ export function buildUploadFileToolDefinitions(input: {
 
       if (args.network != null && args.network !== 'mvc' && args.network !== 'btc' && args.network !== 'opcat') {
         return `Invalid network "${args.network}" — must be one of mvc, btc, opcat.`
+      }
+
+      // Size bound before any approval dialog: a missing file falls through
+      // to the daemon's own not-found error unchanged.
+      const stat = statSync(filePath, { throwIfNoEntry: false })
+      if (stat && stat.size > DIRECT_UPLOAD_MAX_BYTES) {
+        return `upload_file refused: "${filePath}" is ${formatBytes(stat.size)}, above the ${formatBytes(DIRECT_UPLOAD_MAX_BYTES)} limit for a direct /file upload. `
+          + 'Larger files need the chunked large-file path (metabot file upload-large), which this tool does not drive.'
       }
 
       // Gate: the file must live inside the session workspace, or the owner

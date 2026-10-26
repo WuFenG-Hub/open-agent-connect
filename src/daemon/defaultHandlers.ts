@@ -14478,7 +14478,8 @@ export function createDefaultMetabotDaemonHandlers(input: {
           );
         }
       },
-    },    simplenote: {
+    },
+    simplenote: {
       post: async (rawInput) => {
         const actor = await resolveActorWriteContext(rawInput.from);
         if ('failure' in actor) {
