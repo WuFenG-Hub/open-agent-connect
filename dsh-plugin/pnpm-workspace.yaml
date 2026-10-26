@@ -3,6 +3,26 @@
 # native build script stays blocked.
 allowBuilds:
   koffi: false
+
+# Audit pins for advisories reached only through DSH kernel transitive
+# dependencies, which pin older exact versions (Dependabot reports them as
+# security_update_not_possible). Same pattern as the repository root.
+#   - zod 4.6.7: GHSA-mrhx-c7xc-m3w5 (<4.6.6), via dsh-llm (^4.4.3) and the
+#     exact 4.4.3 pins in dsh-typert-registry / dsh-user-questions /
+#     dsh-workspace; the same kernel release already runs dsh-llm on 4.6.x.
+#   - undici 8.12.3: 8.x advisories (<8.12.2), via dsh-http-proxy (exact
+#     8.11.2); dev-only path through dsh-web-app.
+#   - fast-uri 3.1.9: 3.x advisories (<3.1.9), via ajv (^3.0.1); dev-only path.
+#   - fflate 0.8.3: GHSA-px8p-9vwx-vf98 (<0.8.3), via libreoffice-kit (exact
+#     0.8.2); dev-only path.
+#   - http-cache-semantics 4.3.0: GHSA-ch52-4w7c-c8xp (<=4.2.0), via
+#     got > cacheable-request; dev-only path.
+overrides:
+  fast-uri: 3.1.9
+  fflate: 0.8.3
+  http-cache-semantics: 4.3.0
+  undici: 8.12.3
+  zod: 4.6.7
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-group@1.0.4 || 1.0.5'
   - '@deepseek-ai/cordis-plugin-loader@1.0.5 || 1.0.6'
