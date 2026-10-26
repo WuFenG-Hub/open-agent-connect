@@ -13,8 +13,14 @@
  * locally and passed as `--from` — no slug means no actor, and the tool
  * refuses before any round trip). This file renders compact views,
  * validates cheaply, builds argv/payload, and surfaces refusals verbatim;
- * it never re-implements protocol logic. Publisher verbs land in a later
- * round.
+ * it never re-implements protocol logic. Publisher face: `metatask_publish`,
+ * `metatask_publish_spec`, `metatask_amend` (`metabot metatask publish |
+ * publish-spec | amend` via `--request-file`); the writer owns the publish
+ * invariants, H_ACT2/H_ACT3 gates, frozen-node and finalnode rules and the
+ * roster auto-pin. The publisher tools enforce the file-mode/inline mutual
+ * exclusion locally with readable errors (the writer refuses mixed input
+ * too, but a local refusal saves the round trip), then forward the payload
+ * verbatim.
  */
 import { runMetabotWithPayloadFile, type RunFn } from './cli-payload.js'
 import type { MetabotCommandResult } from './cli-bridge.js'
@@ -53,6 +59,10 @@ function textOf(value: unknown): string {
 
 function numberOf(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** Tool error convention (metaweb-tools.ts): a readable STRING the model can act on. */
@@ -635,7 +645,305 @@ export function buildMetataskTools(input: {
     },
   }
 
-  return [list, get, replay, claim, release, submit, verify]
+  const publish: HostToolDefinition = {
+    name: 'metatask_publish',
+    description:
+      'Publish a new on-chain MetaTask as the session acting OAC MetaBot (you become the task root author = '
+      + 'publisher; the bot slug is resolved from the session and passed as --from). Nothing is spent before '
+      + 'every invariant passes: single root, acyclic parents, integer weights 1..10000 summing to EXACTLY '
+      + '10000 across all nodes, quorum >= 1, TTL/window > 0 — violations come back as refusals and surface '
+      + 'verbatim. RECOMMENDED for campaign launches: pass draftsFile (absolute path to the machine-validated '
+      + 'campaign drafts JSON) + taskId instead of re-typing title/nodes/spec/policy by hand — file mode '
+      + 'removes LLM transcription errors on large nested arguments. File mode also substitutes '
+      + 'SPEC_PIN:<key> node specid placeholders with the pinIds you pass in specPinByKey (unmapped '
+      + 'placeholders are refused). Never mix the two modes: either draftsFile+taskId, or inline arguments. '
+      + 'After publishing you MUST post a discovery buzz within 24h (title + the full task-root pinId + '
+      + '#metatask) — use the post_buzz tool. COMPETITIVE MODE: set policy.mode="competitive" + '
+      + 'policy.finalnode (the designated terminal node); competitive publishes are refused before H_ACT3 '
+      + 'activation unless allowPreActivation=true is passed (boolean body key). '
+      + 'Requires the OAC daemon running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Task title (inline mode).' },
+        brief: { type: 'string', description: 'What the task is about; shown to every participant (inline mode).' },
+        nodes: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Task tree nodes: {id, parent (null for the single root), title, kind, weight (basis points, ALL nodes sum to exactly 10000), specid?, params?, deps?} (inline mode).',
+        },
+        spec: { type: 'object', additionalProperties: true, description: 'Root verifier spec {name, lang, entry, script, input?, output?, validation?, workspace?} (inline mode).' },
+        policy: {
+          type: 'object',
+          additionalProperties: true,
+          description: 'verifyQuorum (integer >= 1, required), claimTtlHours, verifyWindowHours, submitterShareBP (default 8000), mode ("tree"|"competitive"), finalnode (competitive only) (inline mode).',
+        },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Topic tags (inline mode).' },
+        allowPreActivation: {
+          type: 'boolean',
+          description: 'true to allow a competitive publish before H_ACT3 activation (pilot/testing escape hatch). Serialized as a boolean body key — never a CLI flag.',
+        },
+        draftsFile: { type: 'string', description: 'Absolute path to the campaign drafts JSON; use with taskId instead of inline arguments (file mode).' },
+        taskId: { type: 'string', description: 'The tasks[] entry id inside draftsFile to publish (file mode).' },
+        specPinByKey: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'File mode only: spec key -> published specPinId, substituting SPEC_PIN:<key> node specid placeholders.',
+        },
+      },
+    },
+    output: { schema: { type: 'string' }, render },
+    timeoutMs: METATASK_WRITE_TIMEOUT_MS,
+    execute: async (args: Record<string, unknown>, exec: HostToolExec) => {
+      const draftsFile = textOf(args.draftsFile)
+      const taskId = textOf(args.taskId)
+      const fileMode = Boolean(draftsFile || taskId)
+      const inlineProvided =
+        args.title !== undefined || args.brief !== undefined || args.nodes !== undefined
+        || args.spec !== undefined || args.policy !== undefined || args.tags !== undefined
+      if (fileMode && (!draftsFile || !taskId)) {
+        return toolError(
+          'metatask_publish',
+          'Refused: draftsFile and taskId must be passed together (draftsFile = absolute path to the campaign drafts file, taskId = its tasks[] entry id).',
+        )
+      }
+      if (fileMode && inlineProvided) {
+        return toolError(
+          'metatask_publish',
+          'Refused: pass either draftsFile+taskId OR inline arguments (title/brief/nodes/spec/policy/tags), not both.',
+        )
+      }
+      if (!fileMode && args.specPinByKey !== undefined) {
+        return toolError(
+          'metatask_publish',
+          'Refused: specPinByKey only applies in draftsFile mode (pass draftsFile + taskId).',
+        )
+      }
+      if (args.allowPreActivation !== undefined && typeof args.allowPreActivation !== 'boolean') {
+        return toolError('metatask_publish', 'allowPreActivation must be a boolean (true to unlock pre-H_ACT3 competitive publishes).')
+      }
+      const payload: Record<string, unknown> = {}
+      if (fileMode) {
+        payload.draftsFile = draftsFile
+        payload.taskId = taskId
+        if (args.specPinByKey !== undefined) {
+          if (!isPlainObject(args.specPinByKey)) {
+            return toolError('metatask_publish', 'specPinByKey must be an object of spec key -> specPinId.')
+          }
+          payload.specPinByKey = args.specPinByKey
+        }
+      } else {
+        const title = textOf(args.title)
+        if (!title) return toolError('metatask_publish', 'Refused: title is empty.')
+        payload.title = title
+        const brief = textOf(args.brief)
+        if (brief) payload.brief = brief
+        if (args.nodes !== undefined) {
+          if (!Array.isArray(args.nodes)) return toolError('metatask_publish', 'nodes must be an array of node objects.')
+          payload.nodes = args.nodes
+        }
+        if (args.spec !== undefined) {
+          if (!isPlainObject(args.spec)) return toolError('metatask_publish', 'spec must be an object.')
+          payload.spec = args.spec
+        }
+        if (args.policy !== undefined) {
+          if (!isPlainObject(args.policy)) return toolError('metatask_publish', 'policy must be an object.')
+          payload.policy = args.policy
+        }
+        if (args.tags !== undefined) {
+          if (!Array.isArray(args.tags)) return toolError('metatask_publish', 'tags must be an array of strings.')
+          payload.tags = args.tags
+        }
+      }
+      // The pre-H_ACT3 escape hatch is a modifier in BOTH modes (file-mode
+      // competitive campaigns need it too): forwarded only when explicitly
+      // true, as a boolean body key.
+      if (args.allowPreActivation === true) payload.allowPreActivation = true
+      const slug = metataskActorSlug(host, hostAgent, exec)
+      if (!slug) return toolError('metatask_publish', NO_ACTOR_MESSAGE)
+      try {
+        const outcome = await runMetabotWithPayloadFile(
+          ['metatask', 'publish', '--from', slug],
+          payload,
+          '--request-file',
+          [],
+          run,
+          { timeoutMs: METATASK_WRITE_TIMEOUT_MS },
+        )
+        if (!outcome.ok) return commandFailure('metatask_publish', outcome)
+        return renderWriteData(outcome.data)
+      } catch (error) {
+        return thrownFailure('metatask_publish', error)
+      }
+    },
+  }
+
+  const publishSpec: HostToolDefinition = {
+    name: 'metatask_publish_spec',
+    description:
+      'Publish a STANDALONE verifier spec pin (path /protocols/metatask/spec) as the session acting OAC MetaBot '
+      + '— for node-level specid overrides that must exist BEFORE their task tree, with no carrier task (the '
+      + 'old workaround published a junk single-node task just to harvest its specPinId). Exactly one pin is '
+      + 'spent, after the writer-side gates pass: name + entry, a script that is inline text or a pin:// | '
+      + 'metafile:// reference, and — by default — the v1.2.1 spec.validation block (null_tolerance, '
+      + 'enumeration_closure with a closure string plus an integer self-check count, proposition_fidelity '
+      + 'pointing at an independent correspondence artifact). Set enforceHAct2Validation=false (boolean) ONLY '
+      + 'for a pre-H_ACT2 v1.1-era spec, where the block did not yet exist. RECOMMENDED for campaign '
+      + 'launches: pass draftsFile (absolute path) + specKey instead of re-typing '
+      + 'name/lang/entry/script/input/output/validation by hand — never mix the two modes. The returned '
+      + 'specPinId is what node specid overrides (and a task-root specid) must reference. '
+      + 'Requires the OAC daemon running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Spec name, e.g. witness-extraction-301 (inline mode).' },
+        lang: { type: 'string', description: 'Verifier implementation language, e.g. python3, bash (inline mode).' },
+        entry: { type: 'string', description: 'Offline entry point, e.g. spec-witness-extraction.py (inline mode).' },
+        script: { type: 'string', description: 'Inline verifier script text, or a pin:// | metafile:// reference when too long (inline mode).' },
+        input: { description: 'Input descriptor (string or object); interpreted by the script (inline mode).' },
+        output: { description: 'Output/verdict contract (string or object): pass | fail | invalid (inline mode).' },
+        workspace: { type: 'object', additionalProperties: true, description: 'Workspace declaration (type: git | metafile | inline | pin; git nodes carry baseRef/baseCommit) (inline mode).' },
+        validation: { type: 'object', additionalProperties: true, description: 'v1.2.1 validation block: null_tolerance, enumeration_closure, proposition_fidelity. Required unless enforceHAct2Validation=false (inline mode).' },
+        enforceHAct2Validation: { type: 'boolean', description: 'Default true: enforce the v1.2.1 three-item validation block. Set false only for a pre-H_ACT2 (v1.1-era) spec.' },
+        draftsFile: { type: 'string', description: 'Absolute path to the campaign drafts JSON; use with specKey instead of inline arguments (file mode).' },
+        specKey: { type: 'string', description: 'Key under the draftsFile specs{} map to publish verbatim (file mode).' },
+      },
+    },
+    output: { schema: { type: 'string' }, render },
+    timeoutMs: METATASK_WRITE_TIMEOUT_MS,
+    execute: async (args: Record<string, unknown>, exec: HostToolExec) => {
+      const draftsFile = textOf(args.draftsFile)
+      const specKey = textOf(args.specKey)
+      const fileMode = Boolean(draftsFile || specKey)
+      const inlineProvided =
+        args.name !== undefined || args.lang !== undefined || args.entry !== undefined
+        || args.script !== undefined || args.input !== undefined || args.output !== undefined
+        || args.workspace !== undefined || args.validation !== undefined
+      if (fileMode && (!draftsFile || !specKey)) {
+        return toolError(
+          'metatask_publish_spec',
+          'Refused: draftsFile and specKey must be passed together (draftsFile = absolute path to the campaign drafts file, specKey = key under its specs{} map).',
+        )
+      }
+      if (fileMode && inlineProvided) {
+        return toolError(
+          'metatask_publish_spec',
+          'Refused: pass either draftsFile+specKey OR inline arguments (name/lang/entry/script/input/output/validation/workspace), not both.',
+        )
+      }
+      if (args.enforceHAct2Validation !== undefined && typeof args.enforceHAct2Validation !== 'boolean') {
+        return toolError('metatask_publish_spec', 'enforceHAct2Validation must be a boolean (false only for a pre-H_ACT2 v1.1-era spec).')
+      }
+      const payload: Record<string, unknown> = {}
+      if (fileMode) {
+        payload.draftsFile = draftsFile
+        payload.specKey = specKey
+      } else {
+        for (const key of ['name', 'lang', 'entry'] as const) {
+          const value = textOf(args[key])
+          if (value) payload[key] = value
+        }
+        // Script text passes through VERBATIM (no trim): a verifier script's
+        // leading indentation and trailing newline are semantic, and the
+        // daemon forwards inline script bytes as-is.
+        if (args.script !== undefined) {
+          if (typeof args.script !== 'string') {
+            return toolError('metatask_publish_spec', 'script must be a string (inline verifier text or a pin:// | metafile:// reference).')
+          }
+          payload.script = args.script
+        }
+        for (const key of ['input', 'output'] as const) {
+          if (args[key] !== undefined) payload[key] = args[key]
+        }
+        for (const key of ['workspace', 'validation'] as const) {
+          if (args[key] !== undefined) {
+            if (!isPlainObject(args[key])) return toolError('metatask_publish_spec', `${key} must be an object.`)
+            payload[key] = args[key]
+          }
+        }
+      }
+      // The escape hatch is a modifier in both modes: forwarded only when
+      // explicitly false, as a boolean (the daemon default is true).
+      if (args.enforceHAct2Validation === false) payload.enforceHAct2Validation = false
+      const slug = metataskActorSlug(host, hostAgent, exec)
+      if (!slug) return toolError('metatask_publish_spec', NO_ACTOR_MESSAGE)
+      try {
+        const outcome = await runMetabotWithPayloadFile(
+          ['metatask', 'publish-spec', '--from', slug],
+          payload,
+          '--request-file',
+          [],
+          run,
+          { timeoutMs: METATASK_WRITE_TIMEOUT_MS },
+        )
+        if (!outcome.ok) return commandFailure('metatask_publish_spec', outcome)
+        return renderWriteData(outcome.data)
+      } catch (error) {
+        return thrownFailure('metatask_publish_spec', error)
+      }
+    },
+  }
+
+  const amend: HostToolDefinition = {
+    name: 'metatask_amend',
+    description:
+      'Amend the task tree as the PUBLISHER only (the task root author). Ops may touch only nodes that were '
+      + 'never effectively claimed (tree mode) / never satisfied (competitive mode) — frozen-node refusals, '
+      + 'the weight invariant (sum exactly 10000 after the fold), deps integrity, and the pinned terminal '
+      + '(competitive finalnode stays a live deps sink) are all enforced writer-side and surface verbatim. '
+      + 'bases is computed daemon-side from the current tree head — never send it. The chain replay is '
+      + 'authoritative: an amend this tool accepted but replay rejects is dead on chain. '
+      + 'Requires the OAC daemon running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        rootPinId: { type: 'string', description: 'Task root pinId (64 lowercase hex + i0, 66 chars).' },
+        ops: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: true,
+            description:
+              'One of: {op:"add_node", node:{id, parent, title, kind, weight, specid?, params?, deps?}} | '
+              + '{op:"remove_node", node} | {op:"reweight", node, weight} | {op:"retitle", node, title} | '
+              + '{op:"respec", node, specid}.',
+          },
+        },
+      },
+      required: ['rootPinId', 'ops'],
+    },
+    output: { schema: { type: 'string' }, render },
+    timeoutMs: METATASK_WRITE_TIMEOUT_MS,
+    execute: async (args: Record<string, unknown>, exec: HostToolExec) => {
+      const rootPinId = textOf(args.rootPinId)
+      if (!rootPinId) return toolError('metatask_amend', 'rootPinId is required.')
+      if (!Array.isArray(args.ops) || args.ops.length === 0) {
+        return toolError('metatask_amend', 'ops must be a non-empty array of amend operations.')
+      }
+      const slug = metataskActorSlug(host, hostAgent, exec)
+      if (!slug) return toolError('metatask_amend', NO_ACTOR_MESSAGE)
+      // Payload is EXACTLY {root, ops} — `bases` is owned by the daemon and
+      // computed from the current amend head; sending it is a protocol error.
+      const payload: Record<string, unknown> = { root: rootPinId, ops: args.ops }
+      try {
+        const outcome = await runMetabotWithPayloadFile(
+          ['metatask', 'amend', '--from', slug],
+          payload,
+          '--request-file',
+          [],
+          run,
+          { timeoutMs: METATASK_WRITE_TIMEOUT_MS },
+        )
+        if (!outcome.ok) return commandFailure('metatask_amend', outcome)
+        return renderWriteData(outcome.data)
+      } catch (error) {
+        return thrownFailure('metatask_amend', error)
+      }
+    },
+  }
+
+  return [list, get, replay, claim, release, submit, verify, publish, publishSpec, amend]
 }
 
 function isDuplicateToolError(error: unknown): boolean {
