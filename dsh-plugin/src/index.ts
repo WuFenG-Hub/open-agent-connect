@@ -28,6 +28,7 @@ import { bindUploadFileToolInstall } from './upload-file-tools.js'
 import { bindQaToolInstall } from './qa-tools.js'
 import { bindPrivateChatToolInstall } from './private-chat-tools.js'
 import { bindCommentToolInstall } from './comment-tools.js'
+import { bindOmniCastToolInstall } from './omni-cast-tools.js'
 import { bindMetaprotocolToolInstall } from './metaprotocol-tools.js'
 import { bindSurfToolInstall } from './surf-tools.js'
 import { dispatchSurfRoutes } from './surf-routes.js'
@@ -895,6 +896,7 @@ export async function apply(ctx: HostContext, config: OacDshConfig = {}): Promis
   bindQaToolInstall(ctx)
   bindPrivateChatToolInstall(ctx)
   bindCommentToolInstall(ctx)
+  bindOmniCastToolInstall(ctx)
   bindMetaprotocolToolInstall(ctx)
   bindSurfToolInstall(ctx)
   bindKnowledgeBaseToolInstall(ctx)
