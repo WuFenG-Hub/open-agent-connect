@@ -22,7 +22,9 @@ overrides:
   patch-package: 8.0.1
   protobufjs: 7.6.5
   tmp: 0.2.7
-  undici: 6.28.1
+  # 6.29.1 patches GHSA-xjj6-f33q-929c (high) and GHSA-4qv8-2p9j-2685
+  # (moderate); reached via @metalet/utxo-wallet-sdk (^6.19.2).
+  undici: 6.29.1
   valibot: 1.4.2
   ws: 8.21.0
 
